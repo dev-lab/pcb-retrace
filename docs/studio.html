@@ -1,0 +1,1530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("consent","default",{ad_storage:"granted",ad_user_data:"granted",ad_personalization:"granted",analytics_storage:"granted"});gtag("consent","default",{ad_storage:"denied",ad_user_data:"denied",ad_personalization:"denied",analytics_storage:"denied",region:"AT,BE,BG,HR,CY,CZ,DK,EE,FI,FR,DE,GR,HU,IE,IT,LV,LT,LU,MT,NL,PL,PT,RO,SK,SI,ES,SE,IS,LI,NO,GB,CH,UA".split(",")});</script>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-X1MKL6C4B0"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("js",new Date());gtag("config","G-X1MKL6C4B0");</script>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+	<title>PCB ReTrace Studio</title>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+	<!-- LIBRARIES -->
+	<script async src="https://docs.opencv.org/4.x/opencv.js" type="text/javascript"></script>
+	<script src="spyglass.js"></script>
+
+	<!-- CORE LOGIC -->
+	<script src="cv-core.js"></script>
+	<script src="stitch-editor.js"></script>
+	<script src="studio.js" defer></script>
+    <script src="canvas-ui.js"></script>
+    <script src="nets.js"></script>
+    <script src="inspector.js"></script>
+
+	<link rel="stylesheet" href="common.css">
+	<style>
+		/* VARIABLES */
+		:root { --primary: #2563eb; --surface: #ffffff; --danger: #ef4444; --success: #059669; }
+
+		/* HEADER & NAV */
+		header { background: #fff; padding: 0.5rem 1rem; border-bottom: 1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,0.05); z-index: 50; flex-shrink: 0; }
+		.top-bar { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; max-width: 1400px; margin: 0 auto; width: 100%; }
+		h1 { margin: 0; font-size: 1.1rem; color: #0f172a; white-space: nowrap; margin-right: 1rem;}
+
+		.project-controls { display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 0; flex-wrap: wrap; }
+		.nav-group { display: flex; align-items: center; gap: 0.3rem; flex: 1; min-width: 0; } /* min-width:0 allows shrinking */
+		.nav-label { font-size: 0.65rem; color: #64748b; text-transform: uppercase; font-weight: 700; white-space: nowrap; }
+		.separator { color: #cbd5e1; font-size: 1.2rem; font-weight: 300; display: block; margin: 0 0.2rem; }
+		@media(min-width: 600px) { .separator { display: block; } }
+
+		.desktop-actions { display: flex; gap: 0.3rem; align-items: center; }
+		.mobile-menu-btn { display: none; background: transparent; border: none; font-size: 1.2rem; color: #64748b; padding: 0 0.2rem; cursor: pointer; line-height: 1; }
+
+		/* CONTROLS */
+		.custom-select-wrapper { position: relative; flex: 1; }
+		.custom-select { appearance: none; padding: 0 1.2rem 0 0.5rem; font-size: 0.85rem; border: 1px solid var(--border); border-radius: 0.3rem; background: #fff; color: var(--primary); font-weight: 600; cursor: pointer; height: 1.6rem; width: 100%; }
+		.select-arrow { position: absolute; right: 0.4rem; top: 50%; transform: translateY(-50%); pointer-events: none; font-size: 0.6rem; color: #64748b; }
+
+		button { border: none; border-radius: 0.3rem; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+		button.secondary { background: #fff; color: #475569; border: 1px solid var(--border); }
+		button.primary { background: var(--primary); color: white; border: 1px solid var(--primary); }
+		button.danger { background: #fee2e2; color: var(--danger); border: 1px solid #fecaca; }
+		button.icon-btn { padding: 0; width: 1.8rem; height: 1.8rem; font-size: 1rem; }
+
+		/* TABS */
+		.tabs { display: flex; gap: 1rem; margin-top: 0.2rem; max-width: 1400px; margin-left: auto; margin-right: auto; padding: 0 0.5rem; }
+		.tab-btn { padding: 0.2rem 0; cursor: pointer; color: #64748b; font-weight: 600; border-bottom: 2px solid transparent; font-size: 0.9rem; }
+		.tab-btn:hover { color: var(--primary); }
+		.tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+		/* LAYOUT CONTAINERS */
+		.main-content { flex: 1; position: relative; width: 100%; background: var(--bg); overflow: hidden; }
+		.view-section { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: none; flex-direction: column; }
+		.view-section.active { display: flex; z-index: 10; }
+
+		/* LIST VIEW */
+		.list-fixed-top {
+			flex-shrink: 0;
+			background: var(--bg);
+			border-bottom: 1px solid var(--border);
+			padding: 0.25rem;
+			z-index: 20;
+			width: 100%;
+			max-width: 1200px;
+			margin: 0 auto;
+			box-sizing: border-box; /* Fixes width calculation */
+		}
+
+		.actions-bar {
+			display: flex;
+			gap: 0.5rem;
+			margin-bottom: 0.25rem;
+			flex-wrap: nowrap;		/* Force single row */
+			align-items: center;
+			width: 100%;
+		}
+
+		/* Sort Dropdown: Don't let it grow infinitely */
+		.actions-bar .custom-select-wrapper {
+			flex: 0 0 auto;
+			min-width: 6rem;
+		}
+
+		/* Buttons: Don't shrink or wrap */
+		.actions-bar button, .actions-bar .dropdown button {
+			font-size: 0.75rem;
+			padding: 0 0.8rem;
+			height: 1.6rem;
+			white-space: nowrap;
+			flex-shrink: 0;
+		}
+
+		/* Select inside toolbar */
+		.actions-bar .custom-select {
+			padding: 0.3rem 1.4rem 0.3rem 0.5rem;
+		}
+
+		/* SCROLL AREA */
+		.list-scroll-area {
+			flex: 1;
+			overflow-y: auto;
+			width: 100%;
+			max-width: 1200px;
+			margin: 0 auto;
+			padding: 0 0.5rem 0.5rem 0.5rem;
+			box-sizing: border-box; /* Fixes width calculation */
+			-webkit-overflow-scrolling: touch;
+		}
+
+		/* FORM */
+	   .add-form-container {
+			display: flex;
+			gap: 0.4rem;
+			background: #fff;
+			padding: 0.25rem;
+			border-radius: 0.5rem;
+			border: 1px solid var(--border);
+			align-items: flex-start;
+		}
+		.editor-visuals {
+			display: flex;
+			flex-direction: row; /* Side-by-Side: Spyglass + Thumbs */
+			gap: 0.5rem;
+			flex-shrink: 0;
+		}
+		#inline-thumbs {
+			display: flex;
+			flex-direction: column; /* Vertical Stack */
+			gap: 4px;
+			overflow-y: auto;		/* Scroll Vertically */
+			overflow-x: hidden;
+			height: 200px;			/* Match Spyglass Height */
+			width: 72px;			/* 60px thumb + scrollbar space */
+			padding-right: 2px;
+			border-left: 1px solid #e2e8f0;
+			padding-left: 4px;
+			/* Reset old styles */
+			min-height: 0;
+			border-top: none;
+			padding-top: 0;
+		}
+		.form-preview {
+			width: 200px;
+			height: 200px;
+			flex-shrink: 0;
+			background: #e2e8f0;
+			border-radius: 0.3rem;
+			border: 1px solid var(--border);
+			position: relative;
+			overflow: hidden;
+			display: flex; justify-content: center; align-items: center;
+		}
+		.thumb-promote-btn {
+			position: absolute;
+			top: 0; right: 0;
+			background: #f59e0b; /* Amber/Gold */
+			color: white;
+			border: none;
+			width: 18px; height: 18px;
+			font-size: 12px; line-height: 1;
+			display: flex; align-items: center; justify-content: center;
+			cursor: pointer;
+			z-index: 10;
+			box-shadow: -1px 1px 2px rgba(0,0,0,0.2);
+		}
+		.thumb-promote-btn:hover { background: #d97706; }
+		.thumb-locate-btn {
+			position: absolute; top: 0; left: 0;
+			background: #3b82f6; /* Blue */
+			color: white; border: none;
+			width: 18px; height: 18px;
+			font-size: 10px; line-height: 1;
+			display: flex; align-items: center; justify-content: center;
+			cursor: pointer; z-index: 10;
+			box-shadow: 1px 1px 2px rgba(0,0,0,0.2);
+		}
+		.thumb-locate-btn:hover { background: #2563eb; }
+		canvas#preview-canvas { display: block; width: 100%; height: 100%; object-fit: contain; cursor: crosshair; }
+		.form-preview.empty::after { content: "Click Map"; color:#94a3b8; font-size:0.75rem; font-weight: 600; position: absolute; }
+		.preview-overlay { position: absolute; bottom: 0; right: 0; background: rgba(0,0,0,0.6); color: white; font-size: 0.6rem; padding: 1px 4px; pointer-events: none; border-top-left-radius: 3px; display: none; }
+		.form-preview.has-image .preview-overlay { display: block; }
+		.form-preview.empty canvas { display: none; }
+
+		/* GLOBAL INPUT STYLE */
+		input {
+			padding: 0.3rem 0.5rem;
+			border: 1px solid var(--border);
+			border-radius: 0.3rem;
+			width: 100%;
+			box-sizing: border-box;
+			font-size: 0.85rem;
+			height: 100%;
+		}
+
+		/* Tighter Table Rows */
+		td, th { padding: 0.25rem 0.4rem; }
+
+		/* COMPACT EDITOR LAYOUT (2-Line) */
+		.form-inputs {
+			display: flex;
+			flex-direction: column;
+			gap: 0.4rem;
+			flex: 1;
+			min-width: 0;
+			justify-content: center;
+		}
+
+		.form-row {
+			display: flex;
+			gap: 0.4rem;
+			width: 100%;
+		}
+
+		.input-group {
+			display: flex;
+			align-items: stretch;
+			border: 1px solid var(--border);
+			border-radius: 0.3rem;
+			background: #fff;
+			overflow: hidden;
+			min-width: 0;
+			height: 1.7rem; /* Fixed comfortable touch height */
+		}
+
+		.input-group:focus-within {
+			border-color: var(--primary);
+			box-shadow: 0 0 0 1px var(--primary);
+		}
+
+		.input-group-label {
+			background: #f8fafc;
+			color: #64748b;
+			font-size: 0.6rem;
+			font-weight: 700;
+			padding: 0 0.4rem;
+			display: flex;
+			align-items: center;
+			border-right: 1px solid var(--border);
+			text-transform: uppercase;
+			flex-shrink: 0;
+			user-select: none;
+		}
+
+		/* Override global input style when inside a group */
+		.input-group input {
+			border: none;
+			border-radius: 0;
+			height: 100%;
+		}
+		.input-group input:focus { outline: none; }
+
+		/* Tools inside input group */
+		#new-part-tool-container {
+			display: flex;
+			align-items: center;
+			padding-right: 4px;
+			background: #fff;
+		}
+		#new-part-tool-container .tool-btn {
+			height: 1.4rem; width: 1.4rem;
+			margin-left: 2px;
+		}
+
+		.btn-save-icon {
+			flex-shrink: 0;
+			width: 2.2rem;
+			font-size: 1.2rem;
+			padding: 0;
+			height: 1.7rem;
+			border-radius: 0.3rem;
+		}
+
+		/* TABLE */
+		table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 0.5rem; box-shadow: 0 1px 2px rgba(0,0,0,0.05); table-layout: fixed; }
+		th { background: #f8fafc; font-size: 0.7rem; text-transform: uppercase; color: #475569; padding: 0.4rem 0.5rem; position: sticky; top: 0; z-index: 5; border-bottom: 1px solid var(--border); }
+		td { padding: 0.4rem 0.5rem; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.9rem; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		tbody tr:hover { background-color: #f8fafc; cursor: pointer; }
+		tbody tr.editing { background-color: #e0f2fe !important; border-left: 3px solid var(--primary); }
+		.val-cell { display: flex; align-items: center; justify-content: space-between; gap: 0.2rem; width: 100%; overflow: hidden;}
+		.val-text { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+		.tool-group { display: flex; gap: 0.2rem; align-items: center; flex-wrap: nowrap; flex-shrink: 0; }
+		.tool-btn { background: #e0f2fe; color: var(--primary); width: 1.5rem; height: 1.5rem; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 0.3rem; cursor: pointer; border: 1px solid transparent; flex-shrink: 0; }
+		.tool-btn svg { width: 0.9rem; height: 0.9rem; }
+		.copy-btn { background: #fff; border: 1px solid #cbd5e1; color: #64748b; flex-shrink: 0; width: 1.5rem; height: 1.5rem;}
+
+		.dropdown { position: relative; display: inline-block; }
+		.dropdown button { width: 100%; }
+		.dropdown-content { display: none; position: absolute; left: 0; top: 100%; margin-top: 0.2rem; background-color: #fff; min-width: 140px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); border: 1px solid var(--border); border-radius: 0.4rem; z-index: 999; }
+		.dropdown-content a { color: var(--text); padding: 0.5rem 0.8rem; text-decoration: none; display: block; font-size: 0.8rem; cursor: pointer; }
+		.dropdown-content a:hover { background-color: #f1f5f9; color: var(--primary); }
+
+		/* MAP VIEW */
+		#view-map { padding: 0; overflow: hidden; background-color: #334155 !important; }
+		.map-toolbar { position: absolute; top: 0.5rem; left: 0.5rem; z-index: 100; display: flex; gap: 0.3rem; background: #ffffff; padding: 0.3rem; border-radius: 0.3rem; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
+
+		/* MAP VIEWPORT - ONLY PLACE WITH TOUCH RESTRICTIONS */
+		.map-viewport {
+			width: 100%; height: 100%;
+			cursor: grab;
+			touch-action: none; /* Disable browser handling here only */
+			position: relative; overflow: hidden;
+			display: flex; align-items: center; justify-content: center;
+		}
+		.map-content { position: absolute; top: 0; left: 0; transform-origin: 0 0; z-index: 1; }
+		.pcb-image { display: block; pointer-events: none; max-width: none; user-select: none; }
+		.map-pin { position: absolute; width: 0; height: 0; pointer-events: auto; z-index: 50; }
+		.pin-marker { position: absolute; bottom: 0; left: -10px; width: 20px; height: 20px; background: var(--primary); border: 2px solid #fff; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); box-shadow: 0 2px 4px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; color: white; font-size: 9px; font-weight: bold; transform-origin: 50% 50%; cursor: pointer; }
+		.pin-marker span { transform: rotate(45deg); display:block; }
+		.map-pin:hover .pin-marker { transform: rotate(-45deg) scale(1.3); background: #ef4444; z-index: 60; }
+		.empty-state { text-align: center; color: #94a3b8; margin-top: 3rem; pointer-events: none; width:100%; }
+
+		/* MODALS */
+		/* MODAL STACKING ORDER */
+		#image-settings-modal { z-index: 1000; } /* Base Level */
+		#connections-modal	  { z-index: 1050; } /* Level 2 */
+		#stitch-modal		  { z-index: 1060; } /* Level 3 */
+		#confirmation-modal	  { z-index: 1100; } /* Top Level (Alerts) */
+		.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 1000; }
+		.modal-content { width: 95%; max-width: 900px; height: 90vh; background: #f4f4f9; border-radius: 0.5rem; position: relative; overflow: hidden; display: flex; flex-direction: column; }
+		.modal-header { padding: 0.5rem 1rem; background: #fff; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
+		.close-btn { background: transparent; color: #64748b; font-size: 1.5rem; padding: 0; }
+		iframe { width: 100%; flex: 1; border: none; display: none; }
+
+		#tool-selector { flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; }
+		.selector-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; width: 100%; max-width: 600px; }
+		.tool-card { background: white; border: 1px solid var(--border); padding: 1.5rem; border-radius: 0.5rem; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; cursor: pointer; text-align: center; }
+		.tool-card:hover { border-color: var(--primary); box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+		.tool-card-icon { width: 4rem; height: 4rem; } .tool-card-icon svg { width: 100%; height: 100%; } .tool-card-title { font-weight: 700; color: #334155; }
+
+		#board-settings-form, #device-settings-form { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
+		#board-settings-form label, #device-settings-form label { font-size: 0.8rem; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 0.2rem; display: block; }
+		#board-settings-form input, #board-settings-form select,
+		#device-settings-form input, #device-settings-form select { width: 100%; padding: 0.6rem; border: 1px solid var(--border); border-radius: 0.3rem; box-sizing: border-box; font-size: 1rem; }
+
+		/* STITCH MODAL */
+		#stitch-modal .modal-content { max-width: 95vw; height: 90vh; }
+		.stitch-split { display: flex; flex: 1; gap: 5px; overflow: hidden; background: #000; }
+		.stitch-pane { flex: 1; position: relative; overflow: hidden; border: 1px solid #444; }
+		.stitch-pane canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+		.stitch-pane canvas:active { cursor: grabbing; }
+		.stitch-toolbar { padding: 10px; background: #fff; border-top: 1px solid #ccc; display: flex; justify-content: flex-end; gap: 10px; }
+
+		/* IMPORT MODAL */
+		#import-modal .modal-content { max-width: 95vw; height: 90vh; background: #0f172a; color: white; border: 1px solid #334155; }
+		#import-modal .modal-header { background: #1e293b; border-bottom: 1px solid #334155; color: white; }
+		#import-modal .modal-header h3 { color: white; }
+		#import-modal .close-btn { color: #94a3b8; }
+		#import-modal .actions-bar { background: #1e293b; border-top: 1px solid #334155; padding: 10px; color: white; }
+		.import-viewport { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; background: radial-gradient(#334155 1px, transparent 1px) 0 0 / 20px 20px; }
+		#import-canvas { max-width: 100%; max-height: 100%; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5); }
+		#import-video { width: 100%; height: 100%; object-fit: contain; }
+
+		/* Fix for Inspect Tab Layout */
+		#view-inspect {
+		    display: none;
+		    flex-direction: column;
+		    height: 100%;
+		    width: 100%;
+		    background: #0f172a;
+		    color: white;
+		    position: relative;
+		    overflow: hidden; /* Prevent body scroll bars */
+		}
+
+		/* When active, force flex display to enable the column layout */
+		#view-inspect.active {
+		    display: flex !important; 
+		}
+
+		/* Ensure the grid fills remaining space */
+		#inspect-grid {
+		    flex: 1;
+		    min-height: 0; /* Critical for nested flex scrolling/sizing */
+		}
+
+		/* Add to common.css or styles */
+		.net-chip {
+		    background: #e2e8f0;
+		    padding: 2px 6px;
+		    border-radius: 4px;
+		    font-size: 0.85rem;
+		    border: 1px solid #cbd5e1;
+		    cursor: pointer;
+		}
+		.net-chip:hover {
+		    background: #cbd5e1;
+		    border-color: #94a3b8;
+		}
+
+		/* DRAG & DROP OVERLAY */
+		body.drag-active::after {
+			content: '📂 Drop File to Import';
+			position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+			background: rgba(37, 99, 235, 0.85); /* Primary Color + Opacity */
+			color: white; font-size: 2rem; font-weight: 700;
+			display: flex; align-items: center; justify-content: center;
+			z-index: 99999; pointer-events: none;
+			backdrop-filter: blur(4px);
+		}
+
+		/* RESPONSIVE */
+		@media (max-width: 768px) {
+			/* STICKY EDITOR: Force Side-by-Side */
+			.add-form-container { flex-direction: column; }
+
+			.editor-visuals {
+				width: 100%;
+				display: flex;
+				flex-direction: row;
+				justify-content: space-between;
+				gap: 5px;
+			}
+
+			.form-preview {
+				width: auto;
+				flex: 1;
+				height: 200px;
+				min-width: 0;
+			}
+
+			#inline-thumbs {
+				display: flex !important;
+				flex-direction: column;
+				width: 72px;
+				height: 200px;
+				border-left: 1px solid #e2e8f0;
+				flex-shrink: 0;
+			}
+
+			/* TABLE / LIST ITEMS */
+			thead { display: none; }
+
+			/* MOBILE SINGLE LINE ROW */
+			tbody tr {
+				display: flex;
+				align-items: center;
+				gap: 0.4rem;
+				padding: 0.3rem;
+				border: 1px solid var(--border);
+				margin-bottom: 0.25rem;
+				height: 2.2rem;
+				width: 100%;
+				box-sizing: border-box;
+			}
+
+			/* Reset Cell Styles */
+			td { display: block; border: none; padding: 0; }
+			td::before { display: none; }
+
+			/* 1. REF */
+			td:nth-child(1) {
+				flex: 0 0 4rem;
+				font-weight: 700;
+				font-size: 0.9rem;
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
+
+			/* 2. VALUE + TOOLS */
+			td:nth-child(2) {
+				flex: 1 1 auto;
+				min-width: 0;
+				max-width: 40%;
+			}
+			.val-cell { justify-content: flex-start; gap: 0.25rem; }
+			.val-text { font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; }
+
+			.tool-group { display: flex; align-items: center; }
+			.tool-btn { width: 1.3rem; height: 1.3rem; }
+
+			/* 3. DESC */
+			td:nth-child(3) {
+				flex: 1 1 auto;
+				min-width: 0;
+				font-size: 0.8rem;
+				color: #64748b;
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				text-align: right;
+			}
+
+			td:nth-child(4) { display: none; }
+
+			/* MAP TOOLBAR SCROLLING */
+			.map-toolbar {
+				max-width: calc(100vw - 1rem);
+				flex-wrap: nowrap;
+				overflow-x: auto;
+				scrollbar-width: none;
+			}
+			.map-toolbar::-webkit-scrollbar { display: none; }
+			.map-toolbar .custom-select-wrapper { min-width: 120px; width: auto; flex: 0 0 auto; }
+		}
+
+		@media (max-width: 900px) {
+			header { padding: 4px 2px; }
+
+			/* Force Single Line */
+			.top-bar {
+				gap: 2px;
+				flex-wrap: nowrap; /* CRITICAL: Prevents the 3-row break */
+			}
+
+			h1 { display: none; } /* Hide Title */
+			.nav-label { display: none; } /* Hide Labels */
+
+			.nav-group { gap: 2px; }
+
+			/* Dropdowns take all space */
+			.custom-select-wrapper { flex: 1; min-width: 0; }
+			.custom-select {
+				height: 1.7rem;
+				line-height: 1.7rem;
+				padding: 0 1rem 0 0.3rem;
+				font-size: 0.9rem;
+				text-overflow: ellipsis;
+			}
+
+			/* Hide Desktop Buttons, Show '...' */
+			.desktop-actions { display: none; }
+			.mobile-menu-btn {
+				display: block;
+				background: #f8fafc;
+				border: 1px solid #cbd5e1;
+				border-radius: 0.3rem;
+				font-size: 1.2rem;
+				color: #334155;
+
+				/* Dimensions in REM */
+				width: 1.7rem;
+				height: 1.7rem;		 /* Matches the dropdown height */
+
+				padding: 0;
+				cursor: pointer;
+				line-height: 1.6rem; /* Vertical alignment fix */
+				flex-shrink: 0;
+				text-align: center;
+			}
+			.mobile-menu-btn:active {
+				background: #e2e8f0;
+				border-color: #94a3b8;
+			}
+
+			.separator { margin: 0 1px; font-size: 1rem; }
+
+			/* 1. COMPACT TABS */
+			.tabs {
+				margin-top: 0;		 /* Remove top margin */
+				gap: 0.8rem;		 /* Reduce gap between tabs */
+				margin-bottom: 2px;	 /* Tiny breathing room before content */
+			}
+			.tab-btn {
+				padding: 0.1rem 0;	 /* Minimal vertical padding */
+				font-size: 0.85rem;
+				border-width: 2px;	 /* Keep border visible */
+			}
+
+			/* 2. COMPACT ACTION BAR (Sort + Buttons) */
+			.actions-bar {
+				gap: 0.2rem;		 /* Tighter spacing between buttons/dropdown */
+				margin-bottom: 0.2rem;
+			}
+
+			/* 3. FIX SORT DROPDOWN (Alignment & Size) */
+			.actions-bar .custom-select-wrapper {
+				min-width: 5rem;	 /* Allow it to be smaller */
+			}
+
+			.actions-bar .custom-select {
+				height: 1.6rem;		 /* Fixed height */
+				line-height: 1.6rem; /* CRITICAL: Centers text vertically */
+				padding: 0 1rem 0 0.3rem; /* 0 vertical padding, tight horizontal */
+				font-size: 0.8rem;	 /* Readable but compact */
+			}
+
+			/* Adjust arrow position for tighter dropdown */
+			.actions-bar .select-arrow {
+				right: 0.2rem;
+				font-size: 0.5rem;	 /* Smaller arrow */
+			}
+
+			/* Ensure buttons match the tight spacing */
+			.actions-bar button, .actions-bar .dropdown button {
+				padding: 0 0.5rem;
+			}
+		}
+
+		@media (max-width: 600px) {
+			/* 1. Modal Card: Tall & Centered */
+			.modal-content {
+				width: 96% !important;
+				height: 96dvh !important;
+				max-height: 96dvh !important;
+
+				border-radius: 0.5rem !important;
+				margin: auto;
+
+				display: flex;
+				flex-direction: column;
+				box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+				position: relative;
+			}
+
+			/* 2. Header: Ultra Compact */
+			.modal-header {
+				/* Minimal vertical padding */
+				padding: 0.2rem 0.6rem !important;
+
+				/* Flex alignment handles centering, so we don't need thick padding */
+				display: flex !important;
+				align-items: center !important;
+				justify-content: space-between !important;
+
+				min-height: 0 !important;
+				flex-shrink: 0;
+				border-bottom: 1px solid #e2e8f0;
+			}
+
+			.modal-header h3 {
+				font-size: 0.95rem !important;
+				margin: 0 !important;
+				line-height: 1.1 !important; /* Tight line height */
+			}
+
+			.close-btn {
+				font-size: 1.5rem !important;
+				line-height: 1 !important; /* Prevents button from being taller than text */
+				padding: 0 !important;
+				height: auto !important;
+				display: flex;
+				align-items: center;
+			}
+
+			/* 3. Iframe: Fill rest of space */
+			iframe {
+				border-radius: 0 0 0.5rem 0.5rem;
+				flex: 1;
+				min-height: 0;
+				height: 100%;
+			}
+		}
+	</style>
+</head>
+<body>
+
+<header>
+	<div class="top-bar">
+		<h1>PCB ReTrace</h1>
+
+		<!-- DEVICE SELECTOR -->
+		<div class="nav-group">
+			<span class="nav-label">Device</span>
+			<div class="custom-select-wrapper">
+				<select id="device-select" class="custom-select" onchange="switchDevice()"></select>
+				<span class="select-arrow">▼</span>
+			</div>
+
+			<!-- Mobile Trigger -->
+			<button class="mobile-menu-btn" onclick="openMobileMenu('device-actions')">⋮</button>
+
+			<!-- Collapsible Buttons -->
+			<div id="device-actions" class="desktop-actions">
+				<button class="icon-btn secondary" onclick="createNewDevice()" title="New Device">＋</button>
+				<button class="icon-btn secondary" onclick="openDeviceSettings()" title="Edit Device">✎</button>
+				<input type="file" id="device-import-input" accept=".zip,.json" style="display:none" onchange="handleImport(this)">
+				<button class="icon-btn secondary" onclick="document.getElementById('device-import-input').click()" title="Import Device">📂</button>
+				<button class="icon-btn secondary" onclick="exportDeviceZIP()" title="Export Device">💾</button>
+			</div>
+		</div>
+
+		<div class="separator">/</div>
+
+		<!-- BOARD SELECTOR -->
+		<div class="nav-group">
+			<span class="nav-label">Board</span>
+			<div class="custom-select-wrapper">
+				<select id="bom-select" class="custom-select" onchange="switchBom()"></select>
+				<span class="select-arrow">▼</span>
+			</div>
+
+			<!-- Mobile Trigger -->
+			<button class="mobile-menu-btn" onclick="openMobileMenu('board-actions')">⋮</button>
+
+			<!-- Collapsible Buttons -->
+			<div id="board-actions" class="desktop-actions">
+				<button class="icon-btn secondary" onclick="createNewBom()" title="New Board">＋</button>
+				<button class="icon-btn secondary" onclick="openBoardSettings()" title="Board Settings">✎</button>
+			</div>
+		</div>
+    	<a href="guide.html" target="_blank" class="icon-btn secondary" style="text-decoration:none; margin-left:5px; display:flex; align-items:center; justify-content:center;" title="Help / Guide">?</a>
+	</div>
+
+	<div class="tabs">
+		<div id="tab-list" class="tab-btn active" onclick="switchView('list')">📋 BOM</div>
+		<div id="tab-map" class="tab-btn" onclick="switchView('map')">🖼️  Images</div>
+	    <div id="tab-nets" class="tab-btn" onclick="switchView('nets')">🕸️ Nets</div>
+    	<div id="tab-inspect" class="tab-btn" onclick="switchView('inspect')">🔍 Inspect</div>
+	</div>
+</header>
+
+<main class="main-content">
+	<!-- 1. BOM LIST VIEW (Existing) -->
+	<div id="view-list" class="view-section active">
+		<div class="list-fixed-top">
+			<div class="actions-bar">
+				<div class="custom-select-wrapper" style="flex:0 0 auto;">
+					<select id="sort-select" class="custom-select" onchange="changeSortMode()">
+						<option value="none">No Sorting</option>
+						<option value="std">Sort: Type</option>
+						<option value="num">Sort: Num</option>
+					</select>
+					<span class="select-arrow">▼</span>
+				</div>
+				<input type="file" id="import-input" accept=".csv,.json,.zip" style="display:none" onchange="handleImport(this)">
+				<button class="secondary" onclick="document.getElementById('import-input').click()" title="Import">📂</button>
+				<div class="dropdown">
+					<button class="secondary" onclick="toggleExport(event)" title="Export">💾▼</button>
+					<div id="export-dropdown" class="dropdown-content">
+						<a onclick="exportCSV()">CSV</a>
+						<a onclick="exportZIP()">ZIP (Board)</a>
+					</div>
+				</div>
+				<button class="secondary danger" onclick="clearCurrentBom()" title="Clear All">🗑️ </button>
+			</div>
+
+			<div class="add-form-container" id="add-form">
+				<div class="editor-visuals">
+					<div class="form-preview empty" id="form-preview">
+						<canvas id="preview-canvas" width="400" height="400"></canvas>
+						<div class="preview-overlay" id="zoom-level">2x</div>
+					</div>
+					<div id="inline-thumbs"></div>
+				</div>
+
+				<div class="form-inputs">
+					<div class="form-row">
+						<div class="input-group" style="flex: 0 0 35%;">
+							<div class="input-group-label">Ref</div>
+							<input type="text" id="inp-label" placeholder="R1" oninput="checkToolHint(this.value)">
+							<input type="hidden" id="inp-id">
+							<input type="hidden" id="inp-x"> <input type="hidden" id="inp-y"> <input type="hidden" id="inp-img-id">
+						</div>
+						<div class="input-group" style="flex: 1;">
+							<div class="input-group-label">Val</div>
+							<input type="text" id="inp-value" placeholder="10k">
+							<div id="new-part-tool-container"></div>
+						</div>
+					</div>
+					<div class="form-row">
+						<div class="input-group" style="flex: 1;">
+							<div class="input-group-label">Desc</div>
+							<input type="text" id="inp-desc" placeholder="0603, etc...">
+						</div>
+						<button class="danger btn-save-icon" onclick="deleteCurrentPart()" title="Delete">🗑️</button>
+						<button class="primary btn-save-icon" onclick="addPart()" title="Add / Update">💾</button>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<div class="list-scroll-area">
+			<div class="table-container">
+				<table>
+					<thead><tr><th width="15%">Ref</th><th width="35%">Value</th><th width="50%">Desc</th></tr></thead>
+					<tbody id="bom-body"></tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+
+	<!-- 2. IMAGE MAP VIEW (Existing) -->
+	<div id="view-map" class="view-section">
+		<div class="map-toolbar">
+			<div class="custom-select-wrapper">
+				<select id="image-select" class="custom-select" onchange="switchImage()">
+					<option value="" disabled selected>No Images</option>
+				</select>
+				<span class="select-arrow">▼</span>
+			</div>
+			<input
+				type="file"
+				id="import-file-input"
+				accept="image/jpeg, image/png, image/webp, image/avif, image/heic, image/heif, image/bmp, .jpg, .jpeg, .png, .webp, .avif, .heic, .heif, .bmp"
+				style="display:none"
+				onchange="ImageImporter.handleFileSelect(this)"
+			>
+			<button class="icon-btn secondary" onclick="document.getElementById('import-file-input').click()" title="Upload Image">📁</button>
+			<button class="icon-btn secondary" onclick="ImageImporter.openCamera()" title="Camera">📷</button>
+			<button class="icon-btn secondary" onclick="openImageSettings()" title="Image Settings">✎</button>
+			<div style="width:1px; height:20px; background:#cbd5e1; margin:0 0.5rem;"></div>
+			<button class="secondary sm-btn" onclick="fitMap()">Fit</button>
+		</div>
+		<div class="map-viewport" id="map-viewport">
+			<div class="map-content" id="map-content">
+				<div id="map-placeholder" class="empty-state">
+					<h3>No Image Selected</h3>
+					<p>Add images to start positioning components.</p>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- 3. NETS LIST VIEW -->
+	<div id="view-nets" class="view-section">
+		<div class="list-fixed-top">
+			<div class="actions-bar">
+				 <button class="secondary" onclick="exportKiCad()" title="Export KiCad">💾 KiCad</button>
+			</div>
+		</div>
+		<div class="list-scroll-area">
+			<div class="table-container">
+				<table>
+					<thead><tr><th width="30%">Net Name</th><th width="60%">Nodes (Click to Edit)</th><th width="10%"></th></tr></thead>
+					<tbody id="nets-body"></tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+
+	<!-- 4. INSPECT VIEW (Fixed Layout & Toolbar) -->
+	<div id="view-inspect" class="view-section">
+		
+		<!-- Single Floating Toolbar Container -->
+		<div id="inspect-toolbar" style="position:absolute; top:0.5rem; left:0.5rem; right:0.5rem; z-index:100; display:flex; gap:0.5rem; align-items:center; pointer-events:none;">
+			
+			<!-- 1. Layers Dropdown -->
+			<div style="pointer-events:auto; padding:0 0.5rem; background:rgba(255,255,255,0.95); box-shadow:0 2px 10px rgba(0,0,0,0.3); border-radius:4px; height:2rem; display:flex; align-items:center;">
+				<details id="inspect-layers-details" style="position:relative;">
+					<summary style="cursor:pointer; color:#334155; font-weight:700; font-size:0.8rem; outline:none; white-space:nowrap; list-style:none;">☰ Layers ▾</summary>
+					<div id="inspect-layers" style="position:absolute; top:100%; left:-0.5rem; margin-top:0.5rem; background:white; padding:10px; border-radius:4px; box-shadow:0 4px 12px rgba(0,0,0,0.2); display:flex; flex-direction:column; gap:5px; min-width:200px;"></div>
+				</details>
+			</div>
+
+			<!-- 2. Active Net Info (Hidden by default) -->
+			<div id="inspect-active-net" style="pointer-events:auto; background:rgba(30, 41, 59, 0.95); padding:0 0.8rem; border-radius:4px; border:1px solid #475569; display:none; color:white; height:2rem; align-items:center; box-shadow:0 2px 5px rgba(0,0,0,0.5);">
+				<!-- Injected by JS -->
+			</div>
+			
+			<!-- 3. New Net Button -->
+			<button class="primary sm-btn" style="pointer-events:auto; box-shadow:0 2px 5px rgba(0,0,0,0.5); height:2rem;" onclick="inspector.startNewNet()">+ New Net</button>
+		</div>
+		
+		<!-- Full Screen Grid -->
+		<div id="inspect-grid">
+			<div style="display:flex; align-items:center; justify-content:center; color:#64748b; height:100%;">Select layers to inspect</div>
+		</div>
+	</div>
+
+</main>
+
+<footer class="app-footer">Copyright © 2025 Taras Greben — <a href="https://pcb.etaras.com">pcb.eTaras.com</a></footer>
+
+<!-- COMPONENT TOOL MODAL -->
+<div style="display:none" id="tool-modal" class="modal-overlay"><div class="modal-content"><div class="modal-header"><h3 style="margin:0" id="tool-title">Component Tool</h3><button class="close-btn" onclick="closeTool()">×</button></div><div id="tool-selector"><h4 style="color:#64748b; margin-top:0">Choose:</h4><div class="selector-grid" id="selector-grid"></div></div><iframe id="tool-frame" src=""></iframe></div></div>
+
+<!-- BOARD SETTINGS MODAL -->
+<div style="display:none" id="board-settings-modal" class="modal-overlay">
+	<div class="modal-content" style="height:auto; max-width:400px; max-height:80vh; overflow-y:auto;">
+		<div class="modal-header">
+			<h3 style="margin:0">Board Settings</h3>
+			<button class="close-btn" onclick="document.getElementById('board-settings-modal').style.display='none'">×</button>
+		</div>
+		<div id="board-settings-form">
+			<div><label>Board Name</label><input type="text" id="edit-board-name"></div>
+			<div><label>Section (Group)</label><input type="text" id="edit-board-section" placeholder="e.g. Power Supply"></div>
+			<div><label>Parent Device</label><select id="edit-board-device" class="custom-select"></select></div>
+			<div style="margin-top:1rem; display:flex; justify-content:flex-end;">
+				<button class="danger" style="padding:0.6rem 1.2rem;" onclick="deleteBom()">Delete Board</button>
+				<button class="primary" style="padding:0.6rem 1.2rem;" onclick="saveBoardSettings()">Save Changes</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+<!-- DEVICE SETTINGS MODAL -->
+<div style="display:none" id="device-settings-modal" class="modal-overlay">
+	<div class="modal-content" style="height:auto; max-width:400px; max-height:80vh; overflow-y:auto;">
+		<div class="modal-header">
+			<h3 style="margin:0">Device Settings</h3>
+			<button class="close-btn" onclick="document.getElementById('device-settings-modal').style.display='none'">×</button>
+		</div>
+		<div id="device-settings-form">
+			<div><label>Device Name</label><input type="text" id="edit-device-name"></div>
+			<div style="margin-top:1rem; display:flex; justify-content:space-between; align-items:center;">
+				<button class="danger" style="padding:0.6rem 1.2rem;" onclick="deleteCurrentDevice()">Delete Device</button>
+				<button class="primary" style="padding:0.6rem 1.2rem;" onclick="saveDeviceSettings()">Save Changes</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+<!-- CONNECTIONS LIST MODAL -->
+<div style="display:none" id="connections-modal" class="modal-overlay">
+	<div class="modal-content" style="height:auto; max-width:500px; max-height:80vh;">
+		<div class="modal-header">
+			<h3 style="margin:0">Image Connections</h3>
+			<button class="close-btn" onclick="document.getElementById('connections-modal').style.display='none'">×</button>
+		</div>
+		<div style="padding:1rem;">
+			<p style="font-size:0.9rem; color:#666; margin-top:0;">Stitch <b><span id="conn-src-name"></span></b> with other images.</p>
+			<div id="conn-list" style="display:flex; flex-direction:column; gap:0.5rem; max-height:300px; overflow-y:auto;"></div>
+			<div style="margin-top:1rem; padding-top:1rem; border-top:1px solid #eee; text-align:right;">
+				<button class="primary" onclick="runAutoCVBatch()">⚡ Run Auto-CV on All</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+<!-- STITCH EDITOR MODAL -->
+<div style="display:none" id="stitch-modal" class="modal-overlay">
+	<div class="modal-content">
+		<div class="modal-header">
+			<h3 id="stitch-title" style="margin:0">Stitch Images</h3>
+			<button class="close-btn" onclick="document.getElementById('stitch-modal').style.display='none'">×</button>
+		</div>
+		<div class="stitch-split">
+			<div class="stitch-pane"><canvas id="stitch-canvas-src"></canvas></div>
+			<div class="stitch-pane"><canvas id="stitch-canvas-dst"></canvas></div>
+		</div>
+		<div class="stitch-toolbar" style="display:flex; align-items:center; gap:8px;">
+			<!-- JS Injects Flip Button on Left -->
+			
+			<div style="flex:1; text-align:center;">
+				<button class="secondary sm-btn" onclick="stitchEditor.setGrid(2)" title="Set 4 Points (Corners)">Grid 2x2</button>
+				<button class="secondary sm-btn" onclick="stitchEditor.setGrid(3)" title="Set 9 Points (Recommended)">Grid 3x3</button>
+				<button class="secondary sm-btn" onclick="stitchEditor.clearPoints()" title="Remove All Points">Clear</button>
+			</div>
+
+			<button onclick="stitchEditor.refresh()">Reset View</button>
+			<button class="primary" onclick="stitchEditor.save()">Save Match</button>
+		</div>
+	</div>
+</div>
+
+<!-- IMAGE IMPORT MODAL -->
+<div style="display:none" id="import-modal" class="modal-overlay">
+	<div class="modal-content">
+		<div class="modal-header">
+			<h3 style="margin:0">Import Image</h3>
+			<button class="close-btn" onclick="ImageImporter.close()" title="Close">×</button>
+		</div>
+
+		<!-- Editor / Camera Area -->
+		<div class="import-viewport">
+			<canvas id="import-canvas"></canvas>
+			<video id="import-video" style="display:none" playsinline autoplay></video>
+
+			<!-- Camera UI Overlay -->
+			<div id="camera-overlay" style="display:none; position:absolute; inset:0; pointer-events:none;">
+				<button id="btn-flash" style="display:none; pointer-events:auto; position:absolute; top:20px; right:20px; background:rgba(0,0,0,0.5); border:1px solid white; color:white; border-radius:50%; width:40px; height:40px; font-size:18px;" onclick="ImageImporter.toggleFlash()" title="Toggle Flash">⚡</button>
+				<div style="position:absolute; bottom:20px; left:0; right:0; text-align:center; pointer-events:auto;">
+					<button class="primary" style="border-radius:50%; width:60px; height:60px; font-size:24px; box-shadow:0 0 10px rgba(0,0,0,0.5); border:3px solid white;" onclick="ImageImporter.captureVideo()" title="Take Photo">◉</button>
+				</div>
+			</div>
+
+			<!-- Status Message -->
+			<div id="camera-msg" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); color:white; text-align:center;">
+				<p>Starting Camera...</p>
+			</div>
+		</div>
+
+		<!-- Toolbar -->
+		<div class="actions-bar" style="display:flex; justify-content:center; gap:8px; flex-wrap:wrap; align-items:center;">
+			 <!-- Left Group: Edit Tools -->
+			 <button id="btn-retake" class="secondary" style="display:none; border-color:#94a3b8;" onclick="ImageImporter.openCamera()" title="Return to Camera">← Retake</button>
+
+			 <button id="btn-crop-toggle" class="secondary" onclick="ImageImporter.toggleCropMode()" title="Toggle Crop Mode">✂ Crop</button>
+			 <button class="secondary" onclick="ImageImporter.resetView()" title="Fit Image to Screen">Fit</button>
+			 <button id="btn-reset" class="secondary" onclick="ImageImporter.resetEdits()" title="Reset Rotation & Crop">Reset</button>
+
+			 <div style="width:1px; height:20px; background:#475569; margin:0 2px;"></div>
+
+			 <!-- Right Group: Rotation (Wrapped to prevent breaking) -->
+			 <div style="display:flex; gap:2px;">
+				<button class="secondary" onclick="ImageImporter.rotate(-90)" title="Rotate Counter-Clockwise">↺</button>
+				<button class="secondary" onclick="ImageImporter.rotate(180)" title="Rotate 180°">⇅</button>
+				<button class="secondary" onclick="ImageImporter.rotate(90)" title="Rotate Clockwise">↻</button>
+			 </div>
+
+			 <!-- Input & Save -->
+			 <div style="display:flex; gap:4px; align-items:center;">
+				<input type="text" id="import-name" placeholder="Image Name" title="Enter Image Name" style="width:100px; background:#334155; border:1px solid #475569; color:white; border-radius:4px; padding:0 5px; height:1.6rem;">
+				<button class="primary" onclick="ImageImporter.save()" title="Save Image to Board">Save</button>
+			 </div>
+		</div>
+	</div>
+</div>
+
+<!-- GENERIC CONFIRMATION MODAL -->
+<div style="display:none; z-index:1100;" id="confirmation-modal" class="modal-overlay">
+	<div class="modal-content" style="height:auto; max-width:400px; background:#fff; border:1px solid #cbd5e1;">
+		<div class="modal-header">
+			<h3 style="margin:0">Confirm Action</h3>
+			<button class="close-btn" onclick="document.getElementById('confirmation-modal').style.display='none'">×</button>
+		</div>
+		<div style="padding:1.5rem;">
+			<p id="confirm-msg" style="margin-top:0; color:#334155; white-space: pre-wrap;"></p>
+			<div style="margin-top:1.5rem; display:flex; justify-content:flex-end; gap:10px;">
+				<button id="confirm-btn-cancel" class="secondary" style="border-color:#94a3b8;">Cancel</button>
+				<button id="confirm-btn-ok" class="danger">Confirm Delete</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+<!-- IMAGE SETTINGS MODAL -->
+<div style="display:none" id="image-settings-modal" class="modal-overlay">
+	<div class="modal-content" style="height:auto; max-width:400px;">
+		<div class="modal-header">
+			<h3 style="margin:0">Image Settings</h3>
+			<button class="close-btn" onclick="document.getElementById('image-settings-modal').style.display='none'">×</button>
+		</div>
+		<div style="padding:1.5rem; display:flex; flex-direction:column; gap:1rem;">
+
+			<!-- Rename Section -->
+			<div>
+				<label style="font-size:0.8rem; font-weight:700; color:#64748b; text-transform:uppercase; margin-bottom:0.2rem; display:block;">Image Name</label>
+				<input type="text" id="edit-image-name" style="width:100%; padding:0.6rem; border:1px solid #cbd5e1; border-radius:0.3rem; font-size:1rem;">
+			</div>
+
+			<!-- Actions Section -->
+			<button class="secondary" style="justify-content:space-between; padding:0.8rem;" onclick="openConnectionsModal()">
+				<span>🔗 Stitch / Connections</span>
+				<span>→</span>
+			</button>
+
+			<div style="margin-top:0.5rem; display:flex; justify-content:space-between; align-items:center;">
+				<button class="danger" style="padding:0.6rem 1.2rem;" onclick="deleteCurrentImage()">Delete Image</button>
+				<button class="primary" style="padding:0.6rem 1.2rem;" onclick="saveImageSettings()">Save</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+<!-- MOBILE ACTION SHEET -->
+<div style="display:none; align-items:flex-end;" id="mobile-menu-modal" class="modal-overlay" onclick="this.style.display='none'">
+	<div class="modal-content" style="width:100%; max-width:100%; border-radius:1rem 1rem 0 0; margin:0; animation: slideUp 0.2s ease-out;" onclick="event.stopPropagation()">
+		<div class="modal-header">
+			<h3 style="margin:0; font-size:1rem;">Actions</h3>
+			<button class="close-btn" onclick="document.getElementById('mobile-menu-modal').style.display='none'">×</button>
+		</div>
+
+		<!-- CHANGED: Switched from Grid to Flex-Wrap for better spacing on narrow screens -->
+		<div id="mobile-menu-content" style="padding:2rem 1rem; display:flex; flex-wrap:wrap; gap:1.5rem; justify-content:center;">
+			<!-- Buttons injected here -->
+		</div>
+	</div>
+</div>
+
+<style>
+	@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+
+	/* MODIFIED: Column Layout for List View */
+	#mobile-menu-content {
+		padding: 1.5rem 1rem 3rem 1rem; /* Extra bottom padding for safe area */
+		display: flex;
+		flex-direction: column; /* Vertical List */
+		gap: 0.8rem;
+	}
+
+	/* NEW: Row Container */
+	.mobile-action-row {
+		display: flex;
+		align-items: center;
+		gap: 1rem;
+		background: #fff;
+		border: 1px solid #e2e8f0;
+		padding: 0.8rem 1rem;
+		border-radius: 0.8rem;
+		cursor: pointer;
+		transition: background 0.1s;
+		box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+	}
+	.mobile-action-row:active {
+		background: #f1f5f9;
+		transform: scale(0.99);
+	}
+
+	/* Text Style */
+	.mobile-action-row span {
+		font-size: 1.1rem;
+		font-weight: 600;
+		color: #334155;
+	}
+
+	/* Reset/Style the Cloned Buttons inside the list */
+	.mobile-action-row button,
+	.mobile-action-row label {
+		width: 2.5rem !important;
+		height: 2.5rem !important;
+		font-size: 1.2rem !important;
+		border-radius: 0.5rem !important;
+		background: #f8fafc !important;
+		border: 1px solid #cbd5e1 !important;
+		display: flex !important;
+		align-items: center !important;
+		justify-content: center !important;
+		padding: 0 !important;
+		margin: 0 !important;
+		box-shadow: none !important;
+	}
+</style>
+
+<script>
+	function openMobileMenu(sourceId) {
+		const source = document.getElementById(sourceId);
+		const target = document.getElementById('mobile-menu-content');
+		target.innerHTML = '';
+
+		Array.from(source.children).forEach(child => {
+			// Filter: Only Buttons or Labels, and ignore hidden elements (like the file input itself)
+			if ((child.tagName === 'BUTTON' || child.tagName === 'LABEL') && child.style.display !== 'none') {
+
+				// 1. Create Row Container
+				const row = document.createElement('div');
+				row.className = 'mobile-action-row';
+				row.onclick = (e) => {
+					// Trigger the original action
+					child.click();
+					document.getElementById('mobile-menu-modal').style.display = 'none';
+				};
+
+				// 2. Clone the Icon Button
+				const clone = child.cloneNode(true);
+				// Remove ID to avoid duplicates
+				clone.removeAttribute('id');
+				// Prevent double-triggering since the row handles the click
+				clone.onclick = (e) => e.stopPropagation();
+				// Make the clone purely visual/clickable via the row
+				clone.style.pointerEvents = 'none';
+
+				// 3. Create Label from Title
+				const label = document.createElement('span');
+				label.innerText = child.title || "Action";
+
+				// 4. Assemble
+				row.appendChild(clone);
+				row.appendChild(label);
+				target.appendChild(row);
+			}
+		});
+
+		document.getElementById('mobile-menu-modal').style.display = 'flex';
+	}
+</script>
+
+<script>
+/**
+ * IMAGE IMPORTER & PROCESSOR
+ * Handles File/Camera Input -> Clean Canvas -> Crop -> JPEG Blob -> Database
+ */
+const ImageImporter = {
+	modal: document.getElementById('import-modal'),
+	canvas: document.getElementById('import-canvas'),
+	ctx: null,
+	video: document.getElementById('import-video'),
+	nameInput: document.getElementById('import-name'),
+	flashBtn: document.getElementById('btn-flash'),
+	retakeBtn: document.getElementById('btn-retake'),
+	cropBtn: document.getElementById('btn-crop-toggle'),
+
+	stream: null,
+	track: null,
+	sourceImage: null,
+	currentRotation: 0,
+	isCameraSession: false,
+	
+	// View State (Zoom/Pan)
+	view: { scale: 1, x: 0, y: 0 },
+	lastDist: 0, // For pinch zoom
+
+	// Crop/Drag State
+	isCropping: false,
+	isDragging: false,
+	isPanning: false,
+	cropRect: null,
+	dragStart: {x:0, y:0},
+	panStart: {x:0, y:0},
+
+	initListeners: function() {
+		if(this.listenersAdded) return;
+		const start = (e) => this.handleDragStart(e);
+		const move = (e) => this.handleDragMove(e);
+		const end = () => this.handleDragEnd();
+		
+		this.canvas.addEventListener('mousedown', start);
+		this.canvas.addEventListener('touchstart', start, {passive: false});
+		
+		window.addEventListener('mousemove', move);
+		window.addEventListener('touchmove', move, {passive: false});
+		
+		window.addEventListener('mouseup', end);
+		window.addEventListener('touchend', end);
+
+		// Zoom Wheel (Desktop)
+		this.canvas.addEventListener('wheel', e => {
+			e.preventDefault();
+			// Zoom towards mouse pointer could be added, but center zoom is safer for simple preview
+			const d = e.deltaY > 0 ? 0.9 : 1.1;
+			this.zoom(d);
+		}, {passive: false});
+
+		this.listenersAdded = true;
+	},
+
+	zoom: function(factor) {
+		const newScale = Math.max(0.1, Math.min(10, this.view.scale * factor));
+		this.view.scale = newScale;
+		this.applyView();
+	},
+
+	applyView: function() {
+		// Apply CSS Transform to visual canvas
+		this.canvas.style.transform = `translate(${this.view.x}px, ${this.view.y}px) scale(${this.view.scale})`;
+	},
+
+	// --- NEW: FIT BUTTON ACTION ---
+	resetView: function() {
+		this.view = { scale: 1, x: 0, y: 0 };
+		this.applyView();
+	},
+
+	handleFileSelect: function(input) {
+		if (input.files && input.files[0]) {
+			this.isCameraSession = false;
+			const file = input.files[0];
+			this.nameInput.value = file.name.replace(/\.[^/.]+$/, "");
+			const reader = new FileReader();
+			reader.onload = (e) => this.loadImage(e.target.result);
+			reader.readAsDataURL(file);
+			input.value = '';
+		}
+	},
+
+	openCamera: async function() {
+		this.isCameraSession = true;
+		this.openModal('camera');
+		const overlay = document.getElementById('camera-overlay');
+		const msg = document.getElementById('camera-msg');
+		msg.style.display = 'block'; msg.innerHTML = "Requesting Camera Access...";
+		overlay.style.display = 'none'; this.flashBtn.style.display = 'none';
+
+		if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+			msg.innerHTML = "Camera API not supported.<br>(HTTPS required)"; return;
+		}
+
+		try {
+			this.stream = await navigator.mediaDevices.getUserMedia({
+				video: { facingMode: { ideal: 'environment' }, width: { ideal: 4096 }, height: { ideal: 2160 }, focusMode: { ideal: 'continuous' } },
+				audio: false
+			});
+			this.video.srcObject = this.stream;
+			this.video.onloadedmetadata = () => {
+				msg.style.display = 'none'; overlay.style.display = 'block';
+				this.track = this.stream.getVideoTracks()[0];
+				const caps = this.track.getCapabilities ? this.track.getCapabilities() : {};
+				const supConstraints = navigator.mediaDevices.getSupportedConstraints();
+				if (('torch' in caps) || supConstraints.torch) {
+					this.flashBtn.style.display = 'block';
+					this.flashBtn.style.background = 'rgba(0,0,0,0.5)';
+					this.flashBtn.dataset.on = "false";
+				}
+			};
+		} catch (err) { console.error(err); msg.innerHTML = "Error accessing camera:<br>" + err.message; }
+	},
+
+	toggleFlash: function() {
+		if (!this.track) return;
+		const newState = !(this.flashBtn.dataset.on === "true");
+		const promise = this.track.applyConstraints({ advanced: [{ torch: newState }] });
+		if(promise) {
+			promise.then(() => {
+				this.flashBtn.dataset.on = newState;
+				this.flashBtn.style.background = newState ? '#eab308' : 'rgba(0,0,0,0.5)';
+			}).catch(e => {
+				const oldBg = this.flashBtn.style.background;
+				this.flashBtn.style.background = '#ef4444';
+				setTimeout(() => this.flashBtn.style.background = oldBg, 500);
+			});
+		}
+	},
+
+	captureVideo: function() {
+		if (!this.video.videoWidth) return;
+		this.canvas.width = this.video.videoWidth;
+		this.canvas.height = this.video.videoHeight;
+		this.canvas.getContext('2d').drawImage(this.video, 0, 0);
+		this.stopStream();
+		
+		const now = new Date();
+		const ts = now.toISOString().replace(/[-:T]/g, '').slice(0, 14);
+		this.nameInput.value = `IMG_${ts}`;
+		this.loadImage(this.canvas.toDataURL('image/jpeg'));
+	},
+
+	openModal: function(mode = 'edit') {
+		this.modal.style.display = 'flex';
+		this.ctx = this.canvas.getContext('2d');
+		if(mode === 'edit') {
+			this.canvas.style.display = 'block';
+			this.video.style.display = 'none';
+			document.getElementById('camera-overlay').style.display = 'none';
+			document.getElementById('camera-msg').style.display = 'none';
+			this.retakeBtn.style.display = this.isCameraSession ? 'block' : 'none';
+			this.initListeners();
+		} else if (mode === 'camera') {
+			this.canvas.style.display = 'none';
+			this.video.style.display = 'block';
+			this.retakeBtn.style.display = 'none';
+		}
+	},
+
+	stopStream: function() {
+		if (this.stream) {
+			this.stream.getTracks().forEach(t => { try { t.applyConstraints({ advanced: [{ torch: false }] }); } catch(e){} t.stop(); });
+			this.stream = null; this.track = null;
+		}
+	},
+
+	close: function() {
+		this.modal.style.display = 'none';
+		this.stopStream();
+		this.sourceImage = null;
+		this.cropRect = null;
+		this.resetView(); // Reset zoom when closing
+	},
+
+	loadImage: function(dataUrl) {
+		this.openModal('edit');
+		const img = new Image();
+		img.onload = () => {
+			this.sourceImage = img;
+			this.resetEdits(); // Full Reset (View + Rotation + Crop)
+		};
+		img.onerror = () => { alert("Error: Image format not supported."); this.close(); };
+		img.src = dataUrl;
+	},
+
+	resetEdits: function() {
+		this.currentRotation = 0;
+		this.cropRect = null;
+		this.resetView();
+		this.render();
+	},
+
+	rotate: function(deg) {
+		this.currentRotation = (this.currentRotation + deg) % 360;
+		this.cropRect = null;
+		this.render();
+	},
+
+	toggleCropMode: function() {
+		this.isCropping = !this.isCropping;
+		this.cropBtn.style.background = this.isCropping ? '#2563eb' : '';
+		this.cropBtn.style.color = this.isCropping ? 'white' : '';
+		// Visual feedback: Crosshair for Cropping, Hand for Panning
+		this.canvas.style.cursor = this.isCropping ? 'crosshair' : 'grab';
+	},
+
+	getCanvasCoords: function(e) {
+		const rect = this.canvas.getBoundingClientRect();
+		const cx = e.touches ? e.touches[0].clientX : e.clientX;
+		const cy = e.touches ? e.touches[0].clientY : e.clientY;
+		const scaleX = this.canvas.width / rect.width;
+		const scaleY = this.canvas.height / rect.height;
+		return { x: (cx - rect.left) * scaleX, y: (cy - rect.top) * scaleY };
+	},
+
+	handleDragStart: function(e) {
+		// Pinch Start (Mobile Zoom)
+		if (e.type === 'touchstart' && e.touches.length > 1) {
+			this.isDragging = false; 
+			this.isPanning = false;
+			const dx = e.touches[0].clientX - e.touches[1].clientX;
+			const dy = e.touches[0].clientY - e.touches[1].clientY;
+			this.lastDist = Math.hypot(dx, dy);
+			return;
+		}
+
+		if (e.type === 'touchstart') e.preventDefault();
+
+		if (this.isCropping) {
+			this.isDragging = true;
+			this.dragStart = this.getCanvasCoords(e);
+			this.cropRect = { x: this.dragStart.x, y: this.dragStart.y, w: 0, h: 0 };
+			this.render();
+		} else {
+			// Pan Start
+			this.isPanning = true;
+			this.canvas.style.cursor = 'grabbing';
+			const cx = e.touches ? e.touches[0].clientX : e.clientX;
+			const cy = e.touches ? e.touches[0].clientY : e.clientY;
+			this.panStart = { x: cx - this.view.x, y: cy - this.view.y };
+		}
+	},
+
+	handleDragMove: function(e) {
+		// Pinch Move
+		if (e.touches && e.touches.length > 1) {
+			e.preventDefault();
+			const dx = e.touches[0].clientX - e.touches[1].clientX;
+			const dy = e.touches[0].clientY - e.touches[1].clientY;
+			const curDist = Math.hypot(dx, dy);
+			if (this.lastDist > 0) {
+				const diff = curDist / this.lastDist;
+				const factor = 1 + (diff - 1) * 0.5; // Soften zoom speed
+				this.zoom(factor);
+			}
+			this.lastDist = curDist;
+			return;
+		}
+
+		if (e.type === 'touchmove') e.preventDefault();
+
+		if (this.isCropping && this.isDragging) {
+			const cur = this.getCanvasCoords(e);
+			const w = cur.x - this.dragStart.x;
+			const h = cur.y - this.dragStart.y;
+			this.cropRect = {
+				x: w < 0 ? cur.x : this.dragStart.x,
+				y: h < 0 ? cur.y : this.dragStart.y,
+				w: Math.abs(w),
+				h: Math.abs(h)
+			};
+			this.render();
+		} else if (this.isPanning) {
+			const cx = e.touches ? e.touches[0].clientX : e.clientX;
+			const cy = e.touches ? e.touches[0].clientY : e.clientY;
+			this.view.x = cx - this.panStart.x;
+			this.view.y = cy - this.panStart.y;
+			this.applyView();
+		}
+	},
+
+	handleDragEnd: function() {
+		this.isDragging = false;
+		this.isPanning = false;
+		this.lastDist = 0;
+		if(!this.isCropping) this.canvas.style.cursor = 'grab';
+
+		if(this.cropRect && (this.cropRect.w < 10 || this.cropRect.h < 10)) {
+			this.cropRect = null;
+			this.render();
+		}
+	},
+
+	render: function() {
+		if (!this.sourceImage) return;
+		const width = this.sourceImage.width;
+		const height = this.sourceImage.height;
+		const angle = this.currentRotation * Math.PI / 180;
+		const sin = Math.abs(Math.sin(angle));
+		const cos = Math.abs(Math.cos(angle));
+		const newWidth = width * cos + height * sin;
+		const newHeight = width * sin + height * cos;
+
+		this.canvas.width = newWidth;
+		this.canvas.height = newHeight;
+
+		this.ctx.clearRect(0, 0, newWidth, newHeight);
+		this.ctx.save();
+		this.ctx.translate(newWidth / 2, newHeight / 2);
+		this.ctx.rotate(angle);
+		this.ctx.drawImage(this.sourceImage, -width / 2, -height / 2);
+		this.ctx.restore();
+
+		if (this.cropRect) {
+			this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+			this.ctx.fillRect(0, 0, newWidth, newHeight);
+			this.ctx.clearRect(this.cropRect.x, this.cropRect.y, this.cropRect.w, this.cropRect.h);
+			this.ctx.save();
+			this.ctx.beginPath();
+			this.ctx.rect(this.cropRect.x, this.cropRect.y, this.cropRect.w, this.cropRect.h);
+			this.ctx.clip();
+			this.ctx.translate(newWidth / 2, newHeight / 2);
+			this.ctx.rotate(angle);
+			this.ctx.drawImage(this.sourceImage, -width / 2, -height / 2);
+			this.ctx.restore();
+			this.ctx.strokeStyle = '#ef4444';
+			this.ctx.lineWidth = 3;
+			this.ctx.strokeRect(this.cropRect.x, this.cropRect.y, this.cropRect.w, this.cropRect.h);
+		}
+	},
+
+	save: function() {
+		if (!this.sourceImage) return;
+		let name = this.nameInput.value.trim() || "New Image";
+		name = name.replace(/\.(jpg|jpeg|png)$/i, "");
+		const rect = this.cropRect;
+		
+		// Clean up view before saving (so render is pure)
+		this.cropRect = null;
+		this.resetView(); 
+		this.render();
+
+		let finalCanvas = this.canvas;
+		if (rect) {
+			const tempCanvas = document.createElement('canvas');
+			tempCanvas.width = rect.w;
+			tempCanvas.height = rect.h;
+			const tCtx = tempCanvas.getContext('2d');
+			tCtx.drawImage(this.canvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+			finalCanvas = tempCanvas;
+			this.cropRect = rect;
+		}
+
+		finalCanvas.toBlob((blob) => {
+			if (typeof saveProcessedImageToDB === 'function') {
+				saveProcessedImageToDB(blob, name);
+				this.close();
+			} else { alert("Error: saveProcessedImageToDB missing"); }
+		}, 'image/jpeg', 0.85);
+	}
+};
+</script>
+
+</body>
+</html>

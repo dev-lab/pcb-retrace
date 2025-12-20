@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("consent","default",{ad_storage:"granted",ad_user_data:"granted",ad_personalization:"granted",analytics_storage:"granted"});gtag("consent","default",{ad_storage:"denied",ad_user_data:"denied",ad_personalization:"denied",analytics_storage:"denied",region:"AT,BE,BG,HR,CY,CZ,DK,EE,FI,FR,DE,GR,HU,IE,IT,LV,LT,LU,MT,NL,PL,PT,RO,SK,SI,ES,SE,IS,LI,NO,GB,CH,UA".split(",")});</script>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-X1MKL6C4B0"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("js",new Date());gtag("config","G-X1MKL6C4B0");</script>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>PCB ReTrace</title>
+	<link rel="stylesheet" href="common.css">
+	<style>
+		/* OVERRIDE COMMON.CSS APP LOCKS */
+		/* This ensures the landing page scrolls normally and footer is visible */
+		html, body {
+			height: auto !important;
+			overflow-y: auto !important; /* Force scrollbar */
+			display: block !important;   /* Disable app flex layout */
+			margin: 0;
+			padding: 0;
+			background: white;
+			color: var(--text-default);
+		}
+
+		:root { --hero-bg: #f8fafc; --text-main: #0f172a; --text-sub: #475569; --primary: #2563eb; }
+		
+		/* HERO SECTION */
+		.hero {
+			padding: 4rem 1rem 3rem;
+			text-align: center;
+			background: radial-gradient(circle at 50% 50%, #f1f5f9 0%, #fff 70%);
+			border-bottom: 1px solid #e2e8f0;
+		}
+		.hero h1 { font-size: 2.5rem; margin-bottom: 1rem; letter-spacing: -0.05em; color: var(--text-main); }
+		.hero p { font-size: 1.2rem; color: var(--text-sub); max-width: 600px; margin: 0 auto 2rem; }
+		
+		.cta-button {
+			display: inline-block;
+			background: var(--primary); color: white;
+			padding: 0.8rem 2rem; border-radius: 2rem;
+			font-weight: 700; text-decoration: none; font-size: 1.1rem;
+			box-shadow: 0 4px 6px rgba(37, 99, 235, 0.2);
+			transition: transform 0.1s, box-shadow 0.1s;
+		}
+		.cta-button:hover { transform: translateY(-2px); box-shadow: 0 6px 12px rgba(37, 99, 235, 0.3); }
+		.cta-button:active { transform: translateY(0); }
+
+		.secondary-links { margin-top: 1.5rem; display: flex; gap: 1rem; justify-content: center; font-size: 0.9rem; }
+		.secondary-links a { color: var(--text-sub); text-decoration: none; border-bottom: 1px dotted #ccc; }
+
+		/* FEATURES GRID */
+		.features {
+			max-width: 1000px; margin: 3rem auto; padding: 0 1rem;
+			display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2rem;
+		}
+		.feature-card { padding: 1.5rem; border: 1px solid #e2e8f0; border-radius: 1rem; transition: border-color 0.2s; }
+		.feature-card:hover { border-color: var(--primary); }
+		.feature-icon { font-size: 2rem; margin-bottom: 1rem; display: block; }
+		.feature-card h3 { margin: 0 0 0.5rem; color: var(--text-main); }
+		.feature-card p { color: var(--text-sub); font-size: 0.95rem; margin: 0; }
+
+		/* TOOLS LIST */
+		.tools-section { background: #f8fafc; padding: 3rem 1rem; border-top: 1px solid #e2e8f0; }
+		.tools-container { max-width: 800px; margin: 0 auto; }
+		.tools-title { text-align: center; margin-bottom: 2rem; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; font-size: 0.9rem; font-weight: 700; }
+		
+		.tool-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+		.tool-link { 
+			background: white; border: 1px solid #e2e8f0; border-radius: 0.5rem; 
+			padding: 1rem; text-align: center; text-decoration: none; color: inherit;
+			transition: transform 0.2s;
+		}
+		.tool-link:hover { transform: translateY(-3px); border-color: var(--primary); }
+		.tool-link strong { display: block; color: var(--primary); margin-bottom: 0.2rem; }
+		.tool-link span { font-size: 0.8rem; color: #64748b; }
+
+		footer.landing-footer {
+			margin-top: 0; 
+			padding: 2rem 1rem; 
+			text-align: center; 
+			background: white; 
+			border-top: 1px solid #e2e8f0;
+			color: #94a3b8;
+			font-size: 0.8rem;
+		}
+		footer.landing-footer a { color: inherit; text-decoration: underline; }
+
+		@media (max-width: 600px) {
+			.hero { padding: 3rem 1rem; }
+			.hero h1 { font-size: 2rem; }
+			.tool-grid { grid-template-columns: 1fr; }
+		}
+	</style>
+</head>
+<body>
+
+<div class="hero">
+	<h1>PCB ReTrace</h1>
+	<p>Digitize, document, and reverse engineer printed circuit boards. Map components, trace nets, and inspect layers. Runs entirely in your browser.</p>
+	
+	<a href="studio.html" class="cta-button">Launch Studio</a>
+	
+	<div class="secondary-links">
+		<a href="guide.html">📖 User Guide & Documentation</a>
+		<a href="https://github.com/dev-lab/pcb-retrace">GitHub Repo</a>
+	</div>
+</div>
+
+<div class="features">
+	<div class="feature-card">
+		<span class="feature-icon">🔒</span>
+		<h3>Privacy First</h3>
+		<p>Zero cloud upload. All images and data are stored in your browser's local database. Works 100% offline.</p>
+	</div>
+	<div class="feature-card">
+		<span class="feature-icon">🕸️</span>
+		<h3>Netlist Tracing</h3>
+		<p>Click-to-trace connectivity across your board. Define nets, label nodes, and export directly to <strong>KiCad</strong>.</p>
+	</div>
+	<div class="feature-card">
+		<span class="feature-icon">👁️</span>
+		<h3>Auto-Stitch & Inspect</h3>
+		<p>Align close-up shots with wide-angle views using Computer Vision. Stitch Top vs. Bottom layers for X-Ray inspection.</p>
+	</div>
+</div>
+
+<div class="tools-section">
+	<div class="tools-container">
+		<div class="tools-title">Included Utilities</div>
+		<div class="tool-grid">
+			<a href="resistor.html" class="tool-link">
+				<strong>Resistor Decoder</strong>
+				<span>3-6 Bands & Reverse Lookup</span>
+			</a>
+			<a href="inductor.html" class="tool-link">
+				<strong>Inductor Decoder</strong>
+				<span>Standard & Military Codes</span>
+			</a>
+			<a href="coil.html" class="tool-link">
+				<strong>Coil Calculator</strong>
+				<span>Air-core Inductance</span>
+			</a>
+		</div>
+	</div>
+</div>
+
+<footer class="landing-footer">
+	<p>Dual Licensed: <strong>AGPL v3</strong> (Open Source) + <strong>Commercial</strong>.</p>
+	<p>Copyright © 2025 Taras Greben — <a href="https://pcb.etaras.com">pcb.eTaras.com</a></p>
+</footer>
+
+</body>
+</html>

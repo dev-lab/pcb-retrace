@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("consent","default",{ad_storage:"granted",ad_user_data:"granted",ad_personalization:"granted",analytics_storage:"granted"});gtag("consent","default",{ad_storage:"denied",ad_user_data:"denied",ad_personalization:"denied",analytics_storage:"denied",region:"AT,BE,BG,HR,CY,CZ,DK,EE,FI,FR,DE,GR,HU,IE,IT,LV,LT,LU,MT,NL,PL,PT,RO,SK,SI,ES,SE,IS,LI,NO,GB,CH,UA".split(",")});</script>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-X1MKL6C4B0"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("js",new Date());gtag("config","G-X1MKL6C4B0");</script>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+	<title>Inductor Decoder</title>
+	<script src="tool-bridge.js"></script>
+	<script src="spyglass.js"></script>
+	<link rel="stylesheet" href="tool-style.css">
+	<style>
+		:root { --accent: #16a34a; --resistor-body: #86efac; --resistor-shadow: #4ade80; --bg: #f0fdf4; }
+		.controls-grid { grid-template-columns: 1fr 1fr 1fr; }
+	</style>
+</head>
+<body>
+
+<div class="container">
+	<h1 id="app-title">Inductor Decoder</h1>
+	<div class="top-section">
+		<div id="spyglass-col" class="col-spyglass">
+			<div class="spyglass-wrapper"><canvas id="tool-canvas" class="spyglass-canvas" width="600" height="600"></canvas><div id="tool-zoom" class="zoom-badge">2x</div></div>
+			<div id="view-selector"></div>
+		</div>
+		<div class="col-controls">
+			<div class="reverse-input-group"><div class="input-row"><input type="text" id="nominal-input" class="inp-nominal" placeholder="e.g. 100n, 4u7"><button class="btn-action" onclick="applyNominal()">Set</button></div></div>
+			<div class="controls-grid">
+				<button class="btn-mode active" onclick="setBands(3)">3 Band</button>
+				<button class="btn-mode" onclick="setBands(4)">4 Band</button>
+				<button class="btn-mode" onclick="setBands(5)">5 Band (Mil)</button>
+			</div>
+		</div>
+	</div>
+	<div class="resistor-wrapper-outer"><div class="resistor-dumbbell-shape"><div class="bands-container" id="picker-area"></div></div></div>
+	<div id="results" class="result-box"></div>
+    <div class="app-footer">Copyright © 2025 Taras Greben — <a href="https://pcb.etaras.com">pcb.eTaras.com</a></div>
+</div>
+<div id="global-dropdown"></div>
+
+<script>
+	const colors = [
+		{ name: 'Black',  val: 0, mult: 1, tol: 20, css: 'c-bk' },
+		{ name: 'Brown',  val: 1, mult: 10, tol: 1, css: 'c-bn' },
+		{ name: 'Red',	  val: 2, mult: 100, tol: 2, css: 'c-rd' },
+		{ name: 'Orange', val: 3, mult: 1000, tol: 3, css: 'c-og' },
+		{ name: 'Yellow', val: 4, mult: 10000, tol: 4, css: 'c-ye' },
+		{ name: 'Green',  val: 5, mult: null, tol: null, css: 'c-gn' },
+		{ name: 'Blue',	  val: 6, mult: null, tol: null, css: 'c-bu' },
+		{ name: 'Violet', val: 7, mult: null, tol: null, css: 'c-vt' },
+		{ name: 'Gray',	  val: 8, mult: null, tol: null, css: 'c-gy' },
+		{ name: 'White',  val: 9, mult: null, tol: null, css: 'c-wh' },
+		{ name: 'Gold',	  val: null, mult: 0.1, tol: 5, css: 'c-gd' },
+		{ name: 'Silver', val: null, mult: 0.01, tol: 10, css: 'c-sv' }
+	];
+	let currentBands=3; let bandState=[1,0,0]; let activeBandIndex=-1; let isEmbed=false; let bridge=null;
+	const globalDropdown = document.getElementById('global-dropdown');
+
+	function init() {
+		initGlobalDropdown();
+		const urlParams = new URLSearchParams(window.location.search);
+		if (urlParams.has('embed') || window.self !== window.top) { isEmbed = true; document.getElementById('app-title').style.display = 'none'; }
+		setBands(3);
+	}
+
+	function initGlobalDropdown(){ globalDropdown.innerHTML=''; colors.forEach((c,i)=>{ const d=document.createElement('div'); d.className=`custom-option ${c.css}`; d.innerText=c.name; d.onclick=e=>{e.stopPropagation();if(activeBandIndex>-1){bandState[activeBandIndex]=i;renderPickers();calculate();closeDropdown();}}; globalDropdown.appendChild(d); }); }
+
+	function openGlobalDropdown(triggerElement) {
+		globalDropdown.style.display = 'flex'; globalDropdown.style.top = '0px'; globalDropdown.style.left = '0px';
+		globalDropdown.classList.remove('condensed', 'super-condensed');
+		globalDropdown.style.height = 'auto'; globalDropdown.style.overflowY = 'hidden';
+		const triggerRect = triggerElement.getBoundingClientRect();
+		const menuRect = globalDropdown.getBoundingClientRect();
+		const viewportHeight = window.innerHeight;
+		let top = triggerRect.bottom + 5;
+		let left = triggerRect.left + (triggerRect.width / 2);
+		let projectedBottom = top + menuRect.height;
+		if (projectedBottom > viewportHeight - 10) { globalDropdown.classList.add('condensed'); projectedBottom = top + globalDropdown.getBoundingClientRect().height; }
+		if (projectedBottom > viewportHeight - 10) { globalDropdown.classList.add('super-condensed'); projectedBottom = top + globalDropdown.getBoundingClientRect().height; }
+		if (projectedBottom > viewportHeight - 10) { const height = globalDropdown.getBoundingClientRect().height; top = viewportHeight - height - 10; if (top < 10) { top = 10; globalDropdown.style.height = (viewportHeight - 20) + 'px'; globalDropdown.style.overflowY = 'auto'; } }
+		globalDropdown.style.top = top + 'px'; globalDropdown.style.left = left + 'px'; globalDropdown.style.transform = 'translateX(-50%)';
+	}
+
+	window.onclick=closeDropdown; function closeDropdown(){globalDropdown.style.display='none';activeBandIndex=-1;}
+	function setBands(n){ currentBands=n; document.querySelectorAll('.btn-mode').forEach((b,i)=>b.classList.toggle('active',(i+3)===n)); if(n===3)bandState=[1,0,0];else if(n===4)bandState=[1,0,0,11];else bandState=[11,1,0,0,10]; renderPickers(); calculate(); }
+	function renderPickers(){ const a=document.getElementById('picker-area'); a.innerHTML=''; for(let i=0;i<currentBands;i++){ const w=document.createElement('div'); w.className='custom-select-wrapper'; const t=document.createElement('div'); t.className=`custom-select__trigger ${colors[bandState[i]].css}`; t.innerHTML=`<span>${colors[bandState[i]].name}</span>`; t.onclick=e=>{e.stopPropagation(); if(activeBandIndex===i&&globalDropdown.style.display==='flex')closeDropdown(); else{activeBandIndex=i;openGlobalDropdown(t);}}; w.appendChild(t); a.appendChild(w); } }
+
+	function parseInputStr(str) { if(!str)return null; str=str.toLowerCase().trim(); let m=1; if(str.includes('m')){m=1e3;str=str.replace('m','.');}else if(str.includes('u')){m=1;str=str.replace('u','.');}else if(str.includes('n')){m=1e-3;str=str.replace('n','.');} const v=parseFloat(str); return isNaN(v)?null:v*m; }
+	function applyNominal() { const raw=document.getElementById('nominal-input').value; const uH=parseInputStr(raw); if(uH===null)return; let val=uH; let exp=0; if(val<10){let s=(Math.round(val*1000)/1000).toString(); if(s.includes('.')){const sh=s.split('.')[1].length;val=Math.round(val*Math.pow(10,sh));exp=-sh;}} let s=val.toString(); const d1=parseInt(s[0]); const d2=parseInt(s.length>1?s[1]:0); const te=s.length-2+exp; let mi=-1; if(te>=0&&te<=4)mi=te;else if(te===-1)mi=10;else if(te===-2)mi=11; if(mi!==-1){ if(currentBands===3)bandState=[d1,d2,mi];else if(currentBands===4)bandState=[d1,d2,mi,11];else bandState=[11,d1,d2,mi,10]; renderPickers(); calculate(); } }
+
+	function decode(idxs) {
+		if (currentBands !== 5 && colors[idxs[0]].name === 'Silver') return { valid: false };
+		let v=0, m=0, t=0;
+		if (currentBands === 3) {
+			v = colors[idxs[0]].val * 10 + colors[idxs[1]].val; m = colors[idxs[2]].mult; t = 20;
+		} else if (currentBands === 4) {
+			v = colors[idxs[0]].val * 10 + colors[idxs[1]].val; m = colors[idxs[2]].mult; t = colors[idxs[3]].tol;
+		} else {
+			if (colors[idxs[0]].name !== 'Silver') return { valid: false };
+			v = colors[idxs[1]].val * 10 + colors[idxs[2]].val; m = colors[idxs[3]].mult; t = colors[idxs[4]].tol;
+		}
+		if (isNaN(v) || m === null || t === null) return { valid: false };
+		return { uH: v * m, tol: t, valid: true };
+	}
+
+	function format(uH){ if(uH>=1000)return(uH/1000).toFixed(2)+'mH'; if(uH<1)return(uH*1000).toFixed(0)+'nH'; return uH.toFixed(2)+'uH'; }
+
+	function calculate(){
+		const f=decode(bandState.slice(0,currentBands)); const b=decode([...bandState.slice(0,currentBands)].reverse());
+
+		const arrowSvg = (isF) => isF ? `<svg viewBox="0 0 24 24"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"></path></svg>` : `<svg viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"></path></svg>`;
+
+		const h=(d,fwd)=>{
+			const btn = isEmbed ? `<button class="btn-select" onclick="bridge.sendResult('${format(d.uH)}')">Select</button>` : '';
+			const badge = fwd ? `<span class="badge-success" style="margin-left:0.5rem; padding:0.1rem 0.5rem; font-size:0.7rem; vertical-align:middle;">Likely</span>` : '';
+
+			return `<div class="result-row"><div class="${fwd?'direction-icon':'direction-icon reverse'}">${arrowSvg(fwd)}</div><div class="val-group"><span class="val-text">${format(d.uH)}</span><span class="meta-text">±${d.tol}%${badge}</span></div>${btn}</div>`;
+		};
+
+		let res=''; if(f.valid)res+=h(f,true); document.getElementById('results').innerHTML=res||'<div style="text-align:center;color:red;padding:1rem">Invalid</div>';
+	}
+
+	function parseInductorDescription(desc) {
+		let n=3, t=-1; if(desc.includes("4-Band"))n=4; else if(desc.includes("5-Band"))n=5;
+		const tm=desc.match(/±\s*([\d.]+)%/); if(tm){const v=parseFloat(tm[1]);const c=colors.findIndex(x=>x.tol===v);if(c!==-1)t=c;}
+		setBands(n); if(t!==-1){ if(n===4)bandState[3]=t; if(n===5)bandState[4]=t; }
+	}
+
+	init();
+	bridge = new ToolBridge({
+		onData: (d) => {
+			if(d.value) document.getElementById('nominal-input').value = d.value;
+			if(d.description) parseInductorDescription(d.description);
+			applyNominal();
+		}
+	});
+</script>
+</body>
+</html>

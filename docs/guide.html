@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>User Guide - PCB ReTrace</title>
+	<link rel="stylesheet" href="common.css">
+	<style>
+		/* Override common.css app locks for document flow */
+		html, body {
+			height: auto !important;
+			overflow-y: auto !important;
+			display: block !important;
+			margin: 0; padding: 0;
+		}
+
+		body { background: #f8fafc; color: #334155; line-height: 1.6; }
+
+		.container { 
+			max-width: 800px; 
+			margin: 0 auto; 
+			padding: 2rem 1rem; 
+			background: white; 
+			min-height: 100vh; 
+			box-shadow: 0 0 20px rgba(0,0,0,0.05); 
+			box-sizing: border-box;
+		}
+		
+		h1 { color: #0f172a; margin-bottom: 0.5rem; border-bottom: 1px solid #e2e8f0; padding-bottom: 1rem; }
+		h2 { color: #1e293b; margin-top: 2.5rem; margin-bottom: 1rem; font-size: 1.5rem; }
+		h3 { color: #2563eb; margin-top: 1.5rem; font-size: 1.1rem; }
+		
+		.badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem; font-weight: bold; background: #e2e8f0; color: #475569; }
+		.badge.pro { background: #dcfce7; color: #166534; }
+		
+		ul, ol { padding-left: 1.5rem; margin-bottom: 1rem; }
+		li { margin-bottom: 0.5rem; }
+		
+		.tip-box { background: #eff6ff; border-left: 4px solid #2563eb; padding: 1rem; margin: 1.5rem 0; border-radius: 0 4px 4px 0; font-size: 0.95rem; }
+		.warn-box { background: #fff1f2; border-left: 4px solid #f43f5e; padding: 1rem; margin: 1.5rem 0; border-radius: 0 4px 4px 0; font-size: 0.95rem; }
+		
+		code { background: #f1f5f9; padding: 0.2rem 0.4rem; border-radius: 3px; font-family: monospace; font-size: 0.9em; color: #0f172a; border: 1px solid #e2e8f0; }
+
+		.nav-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; padding-bottom: 0.5rem; border-bottom: 1px solid #e2e8f0; }
+		.back-link { text-decoration: none; color: #64748b; font-weight: 600; display: flex; align-items: center; gap: 0.5rem; }
+		.back-link:hover { color: #2563eb; }
+		
+		footer { margin-top: 4rem; padding-top: 2rem; border-top: 1px solid #e2e8f0; color: #94a3b8; font-size: 0.8rem; text-align: center; }
+	</style>
+</head>
+<body>
+
+<div class="container">
+	<nav class="nav-header">
+		<a href="index.html" class="back-link">← Back to Home</a>
+		<span style="color:#94a3b8; font-size:0.9rem;">Documentation v5.3</span>
+	</nav>
+
+	<h1>PCB ReTrace Guide</h1>
+	<p class="lead">A local-first browser tool for reverse engineering, documenting, and inspecting printed circuit boards.</p>
+
+	<div class="tip-box">
+		<strong>Privacy Note:</strong> This application runs 100% in your browser. All images and data are stored in your browser's local database (IndexedDB). No data is uploaded to any server.
+	</div>
+
+	<h2>1. Concept & Hierarchy</h2>
+	<p>ReTrace organizes data to match physical hardware:</p>
+	<ol>
+		<li><strong>Device:</strong> The physical unit (e.g., "Multimeter Model X").</li>
+		<li><strong>Board:</strong> A specific PCB inside the device (e.g., "Mainboard", "Power Supply").</li>
+		<li><strong>Images:</strong> Photos of the board (Top, Bottom, Angled shots).</li>
+	</ol>
+
+	<h2>2. The Workflow</h2>
+
+	<h3>Step 1: Setup</h3>
+	<p>Create a <strong>New Device</strong> and a <strong>New Board</strong> using the top menu. Then, upload your images. High-resolution, flat photos work best.</p>
+
+	<h3>Step 2: Mapping Components (BOM)</h3>
+	<p>Navigate to the <strong>Images</strong> tab. Click on a component in the photo to mark it.</p>
+	<ul>
+		<li>The app switches to the <strong>BOM</strong> list.</li>
+		<li>Enter the Reference (e.g., <code>R1</code>).</li>
+		<li>If identifying the value requires calculation, click the tool icon to open the built-in decoders (Resistor Bands, Inductors).</li>
+	</ul>
+
+	<h3>Step 3: Tracing Nets</h3>
+	<p>Use the <strong>Inspect</strong> and <strong>Nets</strong> tabs to document connectivity.</p>
+	<ul>
+		<li><strong>New Net:</strong> In the Inspect tab, click anywhere on the image to create a node. You will be prompted to name the Pin/Pad. If no net is currently active, entering a name will <strong>automatically start a new net</strong>.</li>
+		<li><strong>Add Nodes:</strong> Click on other pins that belong to the same electrical connection.</li>
+		<li><strong>Export:</strong> In the Nets tab, you can export a <code>.net</code> file compatible with <strong>KiCad</strong> to help verify your reverse engineering in a professional EDA tool.</li>
+	</ul>
+
+	<h2>3. Computer Vision & Stitching</h2>
+	<p>ReTrace uses Computer Vision (CV) for <strong>Spatial Alignment</strong>. It allows you to synchronize the view across different images.</p>
+
+	<div class="warn-box">
+		<strong>Important:</strong> The CV engine does <em>not</em> automatically recognize components (it won't read "10k" off a resistor). Its purpose is to mathematically align coordinates between images so you can see through the board.
+	</div>
+
+	<h3>Auto-Stitch (Same Side)</h3>
+	<p>When you upload a new image, ReTrace <strong>automatically attempts to stitch</strong> it against existing images on the board in the background. If features match (e.g., a close-up vs. a wide shot), connections are created automatically.</p>
+	<p>You can also run this manually:</p>
+	<ol>
+		<li>Open <strong>Image Settings</strong> on your Main image.</li>
+		<li>Select <strong>Stitch / Connections</strong> -> <strong>Run Auto-CV</strong>.</li>
+	</ol>
+
+	<h3>Manual Stitch (Top vs. Bottom)</h3>
+	<p>To create an "X-Ray" view where clicking a pin on the Top automatically shows the corresponding pin on the Bottom:</p>
+	<ol>
+		<li>Select your <strong>Top Image</strong>.</li>
+		<li>Go to <strong>Image Settings</strong> -> <strong>Connections</strong>.</li>
+		<li>Find your <strong>Bottom Image</strong> and click <strong>"Edit Stitch"</strong>.</li>
+		<li><strong>Flip Target:</strong> Click the <button style="padding:0 4px; font-size:0.8em;">↔ Flip Target</button> button. This mirrors the bottom image horizontally.</li>
+		<li><strong>Match Points:</strong> Click 4 common features (Vias, Holes, Corners) visible on both images.</li>
+		<li>Click <strong>Save Match</strong>.</li>
+	</ol>
+
+	<h2>4. Tools</h2>
+	<p>ReTrace includes standalone calculators accessible from the BOM editor:</p>
+	<ul>
+		<li><strong>Resistor:</strong> 3-6 Band decoder with reverse lookup.</li>
+		<li><strong>Inductor:</strong> Standard and Military codes.</li>
+		<li><strong>Coil:</strong> Calculator for hand-wound air-core inductors.</li>
+	</ul>
+
+	<h2>5. Data Management</h2>
+	<ul>
+		<li><strong>Device Export (ZIP):</strong> Full backup including all boards and images.</li>
+		<li><strong>Board Export (ZIP):</strong> Portable backup of a single board.</li>
+		<li><strong>CSV Export:</strong> Standard spreadsheet export for BOM ordering.</li>
+		<li><strong>KiCad Export (.net):</strong> Exports identified components and traced nets for use in PCB design software.</li>
+	</ul>
+
+	<footer>
+		Copyright &copy; 2025 Taras Greben.
+	</footer>
+</div>
+
+</body>
+</html>

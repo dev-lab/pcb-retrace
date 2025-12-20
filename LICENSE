@@ -1,0 +1,33 @@
+PCB ReTrace - Dual Licensing Notice
+========================================================================
+
+This software is available under two different licenses:
+
+1. GNU Affero General Public License v3.0 (AGPLv3)
+   This is the default license. It allows you to use, modify, and distribute 
+   this software for free, provided that you disclose your source code and 
+   license modified versions under the same AGPLv3 terms (including network use).
+
+2. Commercial License
+   If you wish to use this software in a proprietary setting, without the 
+   obligations of the AGPLv3 (such as disclosing your modifications), you 
+   must acquire a commercial license. 
+   
+   Please contact [Taras Greben <taras.greben@gmail.com>] for pricing and terms.
+
+========================================================================
+
+GNU AFFERO GENERAL PUBLIC LICENSE
+Version 3, 19 November 2007
+
+Copyright (C) 2025 Taras Greben
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/agpl-3.0.txt>.
+
+SPDX-License-Identifier: AGPL-3.0-only

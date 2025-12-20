@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("consent","default",{ad_storage:"granted",ad_user_data:"granted",ad_personalization:"granted",analytics_storage:"granted"});gtag("consent","default",{ad_storage:"denied",ad_user_data:"denied",ad_personalization:"denied",analytics_storage:"denied",region:"AT,BE,BG,HR,CY,CZ,DK,EE,FI,FR,DE,GR,HU,IE,IT,LV,LT,LU,MT,NL,PL,PT,RO,SK,SI,ES,SE,IS,LI,NO,GB,CH,UA".split(",")});</script>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-X1MKL6C4B0"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("js",new Date());gtag("config","G-X1MKL6C4B0");</script>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+	<title>Resistor Color Decoder</title>
+	<script src="tool-bridge.js"></script>
+	<script src="spyglass.js"></script>
+	<link rel="stylesheet" href="tool-style.css">
+	<style>
+		:root { --accent: #2563eb; --resistor-body: #82cae0; --resistor-shadow: #5ea8bd; }
+		.controls-grid { grid-template-columns: 1fr 1fr; }
+	</style>
+</head>
+<body>
+
+<div class="container">
+	<h1 id="app-title">Resistor Color Decoder</h1>
+
+	<div class="top-section">
+		<div id="spyglass-col" class="col-spyglass">
+			<div class="spyglass-wrapper">
+				<canvas id="tool-canvas" class="spyglass-canvas" width="600" height="600"></canvas>
+				<div id="tool-zoom" class="zoom-badge">2x</div>
+			</div>
+			<div id="view-selector"></div>
+		</div>
+
+		<div class="col-controls">
+			<div class="reverse-input-group">
+				<div class="input-row">
+					<input type="text" id="nominal-input" class="inp-nominal" placeholder="e.g. 4k7, 100">
+					<button class="btn-action" onclick="applyNominal()">Set</button>
+				</div>
+			</div>
+			<div class="controls-grid">
+				<button class="btn-mode" onclick="setBands(3)">3 Band</button>
+				<button class="btn-mode" onclick="setBands(4)">4 Band</button>
+				<button class="btn-mode" onclick="setBands(5)">5 Band</button>
+				<button class="btn-mode active" onclick="setBands(6)">6 Band</button>
+			</div>
+		</div>
+	</div>
+
+	<div class="resistor-wrapper-outer">
+		<div class="resistor-dumbbell-shape">
+			<div class="bands-container" id="picker-area"></div>
+		</div>
+	</div>
+
+	<div id="results" class="result-box"></div>
+    <div class="app-footer">Copyright © 2025 Taras Greben — <a href="https://pcb.etaras.com">pcb.eTaras.com</a></div>
+</div>
+
+<div id="global-dropdown"></div>
+
+<script>
+	const colors = [
+		{ name: 'Black',  val: 0, mult: 1, tol: null, tcr: 250, css: 'c-bk' },
+		{ name: 'Brown',  val: 1, mult: 10, tol: 1, tcr: 100, css: 'c-bn' },
+		{ name: 'Red',	  val: 2, mult: 100, tol: 2, tcr: 50, css: 'c-rd' },
+		{ name: 'Orange', val: 3, mult: 1000, tol: null, tcr: 15, css: 'c-og' },
+		{ name: 'Yellow', val: 4, mult: 10000, tol: null, tcr: 25, css: 'c-ye' },
+		{ name: 'Green',  val: 5, mult: 100000, tol: 0.5, tcr: 20, css: 'c-gn' },
+		{ name: 'Blue',	  val: 6, mult: 1000000, tol: 0.25, tcr: 10, css: 'c-bu' },
+		{ name: 'Violet', val: 7, mult: 10000000, tol: 0.1, tcr: 5, css: 'c-vt' },
+		{ name: 'Gray',	  val: 8, mult: null, tol: 0.05, tcr: 1, css: 'c-gy' },
+		{ name: 'White',  val: 9, mult: null, tol: null, tcr: null, css: 'c-wh' },
+		{ name: 'Gold',	  val: null, mult: 0.1, tol: 5, tcr: null, css: 'c-gd' },
+		{ name: 'Silver', val: null, mult: 0.01, tol: 10, tcr: null, css: 'c-sv' }
+	];
+	const e12=[1.0,1.2,1.5,1.8,2.2,2.7,3.3,3.9,4.7,5.6,6.8,8.2];
+	const e24=[1.0,1.1,1.2,1.3,1.5,1.6,1.8,2.0,2.2,2.4,2.7,3.0,3.3,3.6,3.9,4.3,4.7,5.1,5.6,6.2,6.8,7.5,8.2,9.1];
+
+	let currentBands=4; let bandState=[1,2,2,10,1,2]; let activeBandIndex=-1; let isEmbed=false; let bridge=null;
+	const globalDropdown = document.getElementById('global-dropdown');
+
+	function init() {
+		initGlobalDropdown();
+		const urlParams = new URLSearchParams(window.location.search);
+		if (urlParams.has('embed') || window.self !== window.top) {
+			isEmbed = true;
+			document.getElementById('app-title').style.display = 'none';
+		}
+		setBands(4);
+	}
+
+	function initGlobalDropdown(){
+		globalDropdown.innerHTML='';
+		colors.forEach((c,i)=>{
+			const o=document.createElement('div');
+			o.className=`custom-option ${c.css}`;
+			o.innerText=c.name;
+			o.onclick=e=>{e.stopPropagation(); if(activeBandIndex>-1){bandState[activeBandIndex]=i;renderPickers();calculate();closeDropdown();}};
+			globalDropdown.appendChild(o);
+		});
+	}
+
+	function openGlobalDropdown(triggerElement) {
+		globalDropdown.style.display = 'flex'; globalDropdown.style.top = '0px'; globalDropdown.style.left = '0px';
+		globalDropdown.classList.remove('condensed', 'super-condensed');
+		globalDropdown.style.height = 'auto'; globalDropdown.style.overflowY = 'hidden';
+
+		const triggerRect = triggerElement.getBoundingClientRect();
+		const menuRect = globalDropdown.getBoundingClientRect();
+		const viewportHeight = window.innerHeight;
+
+		let top = triggerRect.bottom + 5;
+		let left = triggerRect.left + (triggerRect.width / 2);
+		let projectedBottom = top + menuRect.height;
+
+		if (projectedBottom > viewportHeight - 10) {
+			globalDropdown.classList.add('condensed');
+			projectedBottom = top + globalDropdown.getBoundingClientRect().height;
+		}
+		if (projectedBottom > viewportHeight - 10) {
+			globalDropdown.classList.add('super-condensed');
+			projectedBottom = top + globalDropdown.getBoundingClientRect().height;
+		}
+		if (projectedBottom > viewportHeight - 10) {
+			const height = globalDropdown.getBoundingClientRect().height;
+			top = viewportHeight - height - 10;
+			if (top < 10) {
+				top = 10;
+				globalDropdown.style.height = (viewportHeight - 20) + 'px';
+				globalDropdown.style.overflowY = 'auto';
+			}
+		}
+		globalDropdown.style.top = top + 'px';
+		globalDropdown.style.left = left + 'px';
+		globalDropdown.style.transform = 'translateX(-50%)';
+	}
+
+	function closeDropdown(){ globalDropdown.style.display='none'; activeBandIndex=-1; }
+	window.addEventListener('click', closeDropdown);
+	window.addEventListener('resize', closeDropdown);
+	window.addEventListener('scroll', closeDropdown, true);
+
+	function setBands(n){ currentBands=n; document.querySelectorAll('.btn-mode').forEach((b,i)=>b.classList.toggle('active',(i+3)===n)); while(bandState.length<n)bandState.push(0); renderPickers(); calculate(); }
+
+	function renderPickers(){
+		const a=document.getElementById('picker-area'); a.innerHTML='';
+		for(let i=0;i<currentBands;i++){
+			const w=document.createElement('div'); w.className='custom-select-wrapper';
+			const t=document.createElement('div'); t.className=`custom-select__trigger ${colors[bandState[i]].css}`;
+			t.innerHTML=`<span>${colors[bandState[i]].name}</span>`;
+			t.onclick=e=>{e.stopPropagation(); if(activeBandIndex===i&&globalDropdown.style.display==='flex')closeDropdown();else{activeBandIndex=i;openGlobalDropdown(t);}};
+			w.appendChild(t); a.appendChild(w);
+		}
+	}
+
+	function parseInputStr(str) { if(!str)return null; let m=1; if(str.includes('M')){m=1e6;str=str.replace('M','.');}else if(str.includes('m')){m=1e-3;str=str.replace('m','.');}else if(str.toLowerCase().includes('k')){m=1e3;str=str.replace(/k/i,'.');}else if(str.toLowerCase().includes('r')){m=1;str=str.replace(/r/i,'.');} const v=parseFloat(str); return isNaN(v)?null:v*m; }
+	function applyNominal(){ const raw=document.getElementById('nominal-input').value; const ohms=parseInputStr(raw); if(ohms===null)return; const nD=(currentBands>=5)?3:2; let val=ohms; const mag=Math.floor(Math.log10(val)); const shift=(nD-1)-mag; let norm=Math.round(val*Math.pow(10,shift)); let s=norm.toString(); if(s.length>nD){norm=Math.round(norm/10);s=norm.toString();} const d=[]; for(let i=0;i<nD;i++)d.push(parseInt(s[i])); const exp=Math.round(Math.log10(ohms/norm)); let mIdx=-1; if(exp>=0&&exp<=9)mIdx=exp;else if(exp===-1)mIdx=10;else if(exp===-2)mIdx=11; if(mIdx!==-1){ bandState[0]=d[0];bandState[1]=d[1]; if(nD===2){bandState[2]=mIdx;if(currentBands===4)bandState[3]=10;}else{bandState[2]=d[2];bandState[3]=mIdx;bandState[4]=1;if(currentBands===6)bandState[5]=1;} renderPickers(); calculate(); } }
+
+	function formatOhmsUI(v){ if(v>=1e6)return(v/1e6).toFixed(2)+' MΩ'; if(v>=1e3)return(v/1e3).toFixed(2)+' kΩ'; if(v<1)return(v*1000).toFixed(0)+' mΩ'; return v.toFixed(2)+' Ω'; }
+	function formatOhmsBOM(v){ if(v>=1e6)return(v/1e6).toFixed(2)+'M'; if(v>=1e3)return(v/1e3).toFixed(2)+'k'; if(v<1)return(v*1000).toFixed(0)+'m'; return v.toFixed(2)+'R'; }
+	function checkSeries(v){ let n=v; while(n>=10)n/=10; while(n<1&&n>0)n*=10; n=Math.round(n*100)/100; if(e12.includes(n))return "E12"; if(e24.includes(n))return "E24"; return ""; }
+
+	function decode(idx){ if(colors[idx[0]].name==='Black'||colors[idx[0]].name==='Gold'||colors[idx[0]].name==='Silver')return{valid:false}; let v=0,m=0,t=0,tcr=0; if(currentBands===3){v=colors[idx[0]].val*10+colors[idx[1]].val;m=colors[idx[2]].mult;t=20;}else if(currentBands===4){v=colors[idx[0]].val*10+colors[idx[1]].val;m=colors[idx[2]].mult;t=colors[idx[3]].tol;}else{v=colors[idx[0]].val*100+colors[idx[1]].val*10+colors[idx[2]].val;m=colors[idx[3]].mult;t=colors[idx[4]].tol;if(currentBands===6)tcr=colors[idx[5]].tcr;} if(m===null||(currentBands>3&&t===null))return{valid:false}; const o=v*m; return{ohms:o,tol:t,tcr,valid:true,seriesInfo:checkSeries(o)}; }
+
+	function calculate(){
+		const f=decode(bandState.slice(0,currentBands)); const b=decode([...bandState.slice(0,currentBands)].reverse());
+		let fb=true; if(f.valid&&!b.valid)fb=true;else if(!f.valid&&b.valid)fb=false;else if(f.valid&&b.valid){fb=!(b.seriesInfo!==""&&f.seriesInfo==="");}
+
+		let h='';
+		const row=(d,isF,best)=>{
+			if(!d.valid&&!best)return'';
+			const cls=best?'result-row best-match':'result-row';
+
+			const arrowSvg = isF ? `<svg viewBox="0 0 24 24"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"></path></svg>` : `<svg viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"></path></svg>`;
+			const ic = isF ? "direction-icon" : "direction-icon reverse";
+
+			const btn = isEmbed ? `<button class="btn-select" onclick="selectResult('${formatOhmsBOM(d.ohms)}')">Select</button>` : '';
+			const badge = best ? `<span class="badge-success" style="margin-left:0.5rem; padding:0.1rem 0.5rem; font-size:0.7rem; vertical-align:middle;">Likely</span>` : '';
+
+			const ser=d.seriesInfo?` <span class="match-badge">${d.seriesInfo}</span>`:'';
+
+			return `<div class="${cls}">
+				<div class="${ic}">${arrowSvg}</div>
+				<div class="val-group">
+					<span class="val-text">${formatOhmsUI(d.ohms)}${ser}</span>
+					<span class="meta-text">±${d.tol}%${d.tcr?` | ${d.tcr}ppm`:''}${badge}</span>
+				</div>
+				${btn}
+			</div>`;
+		};
+
+		if(!f.valid&&!b.valid) h='<div style="text-align:center;color:red;padding:1rem">Invalid</div>';
+		else{
+			if(fb){h+=row(f,true,true);h+=row(b,false,false);}
+			else{h+=row(b,false,true);h+=row(f,true,false);}
+		}
+		document.getElementById('results').innerHTML=h;
+	}
+
+	function selectResult(vStr){
+		let d=`Resistor: ${currentBands}-Band, ±${colors[bandState[currentBands===3?null:(currentBands>=5?4:3)]]?.tol||20}%`;
+		if(bridge) bridge.sendResult(vStr, d);
+	}
+
+	function parseResistorMeta(d){
+		let r={bands:4,tolIdx:-1,tcrIdx:-1}; if(d.includes("3-Band"))r.bands=3;else if(d.includes("5-Band"))r.bands=5;else if(d.includes("6-Band"))r.bands=6;
+		const tm=d.match(/±\s*([\d.]+)%/); if(tm){const t=parseFloat(tm[1]);const c=colors.findIndex(x=>x.tol===t);if(c!==-1)r.tolIdx=c;}
+		const tc=d.match(/(\d+)\s*ppm/i); if(tc){const p=parseInt(tc[1]);const c=colors.findIndex(x=>x.tcr===p);if(c!==-1)r.tcrIdx=c;}
+		return r;
+	}
+
+	init();
+	bridge = new ToolBridge({
+		onData: (d) => {
+			if(d.value) document.getElementById('nominal-input').value = d.value;
+			let meta = {bands:4,tolIdx:-1,tcrIdx:-1};
+			if(d.description) meta = parseResistorMeta(d.description);
+			setBands(meta.bands);
+			applyNominal();
+			if(meta.tolIdx!==-1){ if(meta.bands===4)bandState[3]=meta.tolIdx; else if(meta.bands>=5)bandState[4]=meta.tolIdx; }
+			if(meta.tcrIdx!==-1 && meta.bands===6) bandState[5]=meta.tcrIdx;
+			renderPickers(); calculate();
+		}
+	});
+</script>
+</body>
+</html>

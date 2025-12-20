@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("consent","default",{ad_storage:"granted",ad_user_data:"granted",ad_personalization:"granted",analytics_storage:"granted"});gtag("consent","default",{ad_storage:"denied",ad_user_data:"denied",ad_personalization:"denied",analytics_storage:"denied",region:"AT,BE,BG,HR,CY,CZ,DK,EE,FI,FR,DE,GR,HU,IE,IT,LV,LT,LU,MT,NL,PL,PT,RO,SK,SI,ES,SE,IS,LI,NO,GB,CH,UA".split(",")});</script>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-X1MKL6C4B0"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("js",new Date());gtag("config","G-X1MKL6C4B0");</script>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+	<title>Air Core Coil</title>
+	<script src="tool-bridge.js"></script>
+	<script src="spyglass.js"></script>
+	<link rel="stylesheet" href="tool-style.css">
+	<style>
+		:root {
+			/* Copper Theme */
+			--accent: #ea580c;
+			--copper-dark: #9a3412;
+			--bg: #fff7ed;
+			--border: #fed7aa;
+			--focus-ring: #ffedd5;
+		}
+
+		/* Layout overrides */
+		.coil-viz {
+			width: 100%; height: 120px; display: flex; align-items: center; justify-content: center;
+			background: linear-gradient(to bottom, #fff7ed, #fff);
+			border: 1px solid #fed7aa; border-radius: 0.5rem;
+			overflow: hidden; position: relative; flex-shrink: 0; margin-bottom: 1rem;
+		}
+
+		.coil-viz svg {
+			width: 100%;
+			height: 100%;
+			display: block;
+		}
+
+		svg path {
+			fill: none; stroke: url(#copperGradient); stroke-width: 4; stroke-linecap: round;
+			filter: drop-shadow(0px 2px 2px rgba(0,0,0,0.2));
+		}
+
+		/* Specific Label Color from original file */
+		label { color: #78350f !important; opacity: 1 !important; }
+
+		/* MOBILE OVERRIDES */
+		@media (max-width: 600px) {
+			.result-val { font-size: 1.5rem; }
+
+			/* NEW: Smaller Coil Graphic on Mobile */
+			.coil-viz {
+				height: 80px;	   /* Reduced from 120px */
+				margin-bottom: 0.5rem;
+		   }
+	   }
+	</style>
+</head>
+<body>
+
+<div class="container">
+	<h1 id="app-title">Air Core Calc</h1>
+
+	<div class="top-section">
+		<div id="spyglass-col" class="col-spyglass">
+			<div class="spyglass-wrapper">
+				<canvas id="tool-canvas" class="spyglass-canvas" width="600" height="600"></canvas>
+				<div id="tool-zoom" class="zoom-badge">2x</div>
+			</div>
+			<div class="spyglass-hint">Scroll to zoom</div>
+			<div id="view-selector"></div>
+		</div>
+
+		<div class="col-controls">
+			<div class="input-grid">
+				<div class="form-group">
+					<label>Turns (N)</label>
+					<div class="input-wrapper">
+						<input type="number" id="inp-turns" value="10" min="1" step="1" oninput="updateLength()">
+						<span class="unit">T</span>
+					</div>
+				</div>
+				<div class="form-group">
+					<label>Diameter (D)</label>
+					<div class="input-wrapper">
+						<input type="number" id="inp-dia" value="6" min="0.1" step="0.1" oninput="calculate()">
+						<span class="unit">mm</span>
+					</div>
+				</div>
+				<div class="form-group">
+					<label>Wire Ø (d)</label>
+					<div class="input-wrapper">
+						<input type="number" id="inp-wire" value="0.5" min="0.05" step="0.05" oninput="updateLength()">
+						<span class="unit">mm</span>
+					</div>
+				</div>
+				<div class="form-group">
+					<label>Length (L)</label>
+					<div class="input-wrapper">
+						<input type="number" id="inp-len" value="5" min="0.1" step="0.1" oninput="calculate()" style="background:#f9fafb; color:#666">
+						<span class="unit">mm</span>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<div class="coil-viz">
+		<svg width="300" height="100" viewBox="0 0 300 100" id="coil-svg">
+			<defs>
+				<linearGradient id="copperGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+					<stop offset="0%" style="stop-color:#fdba74;stop-opacity:1" />
+					<stop offset="50%" style="stop-color:#ea580c;stop-opacity:1" />
+					<stop offset="100%" style="stop-color:#7c2d12;stop-opacity:1" />
+				</linearGradient>
+			</defs>
+			<path id="coil-path" d="" />
+		</svg>
+	</div>
+
+	<div class="result-box">
+		<div class="result-row" style="background:#fff7ed; border:1px solid #fed7aa;">
+			<div class="val-group">
+				<span class="val-text" id="res-val" style="color:#9a3412">---</span>
+				<span class="meta-text" id="res-desc" style="color:#c2410c">Adjust parameters above</span>
+			</div>
+			<button id="btn-select" class="btn-select" style="display:none;" onclick="sendResult()">Select</button>
+		</div>
+	</div>
+
+	<div class="app-footer">Copyright © 2025 Taras Greben — <a href="https://pcb.etaras.com">pcb.eTaras.com</a></div>
+</div>
+
+<script>
+	let isEmbed = false;
+	let calculatedValues = { val: '', desc: '' };
+	let bridge = null;
+
+	function init() {
+		const urlParams = new URLSearchParams(window.location.search);
+		if (urlParams.has('embed') || window.self !== window.top) {
+			isEmbed = true;
+			document.getElementById('btn-select').style.display = 'block';
+			document.getElementById('app-title').style.display = 'none';
+		}
+		calculate();
+	}
+
+	function parseDescription(desc) {
+		try {
+			const regex = /([\d\.]+)T,\s*([\d\.]+)mm ID,\s*([\d\.]+)mm Cu/;
+			const match = desc.match(regex);
+			if (match) {
+				document.getElementById('inp-turns').value = match[1];
+				document.getElementById('inp-dia').value = match[2];
+				document.getElementById('inp-wire').value = match[3];
+				updateLength();
+			}
+		} catch(e) {}
+	}
+
+	function updateLength() {
+		const N = parseFloat(document.getElementById('inp-turns').value) || 0;
+		const d_wire = parseFloat(document.getElementById('inp-wire').value) || 0;
+		const len = (N * d_wire * 1.05).toFixed(2);
+		document.getElementById('inp-len').value = len;
+		calculate();
+	}
+
+	function calculate() {
+		const N = parseFloat(document.getElementById('inp-turns').value);
+		const D_mm = parseFloat(document.getElementById('inp-dia').value);
+		const l_mm = parseFloat(document.getElementById('inp-len').value);
+		const w_mm = parseFloat(document.getElementById('inp-wire').value);
+
+		if (!N || !D_mm || !l_mm) return;
+
+		const d_in = D_mm / 25.4;
+		const l_in = l_mm / 25.4;
+		const num = Math.pow(d_in, 2) * Math.pow(N, 2);
+		const den = (18 * d_in) + (40 * l_in);
+		let uH = num / den;
+
+		let displayVal = "", cleanVal = "";
+		if (uH < 1) {
+			let nH = uH * 1000;
+			displayVal = nH.toFixed(0) + " nH";
+			cleanVal = nH.toFixed(0) + "nH";
+		} else {
+			displayVal = uH.toFixed(2) + " µH";
+			cleanVal = uH.toFixed(2) + "uH";
+		}
+
+		const desc = `Air Core: ${N}T, ${D_mm}mm ID, ${w_mm}mm Cu`;
+
+		document.getElementById('res-val').innerText = displayVal;
+		document.getElementById('res-desc').innerText = desc;
+		calculatedValues = { val: cleanVal, desc: desc };
+		drawCoil(N);
+	}
+
+	function drawCoil(turns) {
+		const path = document.getElementById('coil-path');
+		const width = 300;
+		const height = 100;
+		const padding = 20;
+
+		const visualTurns = Math.min(Math.max(turns, 1), 20);
+		const pitch = (width - padding*2) / visualTurns;
+
+		const radius = 24;
+		const midY = 60;
+
+		let d = `M ${padding} ${midY + radius}`;
+		for (let i = 0; i < visualTurns; i++) {
+			const x = padding + (i * pitch);
+			// The magic number 2.5 defines the 'height' of the back loop perspective
+			d += ` C ${x + pitch*0.2} ${midY - radius*2.5}, ${x + pitch*0.8} ${midY - radius*2.5}, ${x + pitch} ${midY + radius}`;
+		}
+		path.setAttribute('d', d);
+	}
+
+	function sendResult() {
+		if(bridge) bridge.sendResult();
+	}
+
+	init();
+
+	bridge = new ToolBridge({
+		onData: (d) => {
+			if(d.description) parseDescription(d.description);
+			calculate();
+		},
+		onNominal: () => calculatedValues.val,
+		onDescription: () => calculatedValues.desc
+	});
+</script>
+</body>
+</html>

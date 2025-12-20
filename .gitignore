@@ -1,0 +1,38 @@
+# --- Operating System Files ---
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+._*
+
+# --- Editor & IDE Configs ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+*.sublime-project
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Exported Data & Backups ---
+# Prevent committing personal board data, exports, or test images
+*.zip
+*.csv
+*.net
+*.kicad_sch
+*.kicad_pcb
+
+# Specific JSON exports (extracted from ZIPs)
+# Note: We allow *.json generally for configs, but ignore these specific export names
+device.json
+bom.json
+
+# --- Temporary / Test Files ---
+tmp/
+temp/
+*.log
