@@ -505,6 +505,25 @@
 			}
 			.map-toolbar::-webkit-scrollbar { display: none; }
 			.map-toolbar .custom-select-wrapper { min-width: 120px; width: auto; flex: 0 0 auto; }
+
+			#view-nets td:nth-child(1) {
+				flex: 1 1 35%;		/* Give Net Name dynamic space */
+				min-width: 0;		/* Allow shrinking if needed */
+				max-width: none;	/* Uncap the width */
+				font-weight: normal;
+			}
+
+			#view-nets td:nth-child(2) {
+				flex: 1 1 50%;		/* Give Nodes list the most space */
+				max-width: none;	/* Remove the 40% cap from BOM */
+				white-space: normal; /* Allow chips to wrap lines */
+			}
+
+			#view-nets td:nth-child(3) {
+				flex: 0 0 auto;		/* Delete button takes minimal space */
+				width: auto;
+				padding-left: 0.5rem;
+			}
 		}
 
 		@media (max-width: 900px) {
@@ -1057,7 +1076,7 @@
 		<div style="padding:1.5rem; display:flex; flex-direction:column; gap:1rem;">
 			<div>
 				<label id="gim-label" style="font-size:0.8rem; font-weight:700; color:#64748b; text-transform:uppercase; margin-bottom:0.2rem; display:block;">Value</label>
-				<input type="text" id="gim-input" style="width:100%; padding:0.6rem; border:1px solid #cbd5e1; border-radius:0.3rem; font-size:1rem;">
+				<input type="text" id="gim-input" style="width:100%; height:auto; padding:0.5rem; border:1px solid #cbd5e1; border-radius:0.3rem; font-size:1rem; box-sizing:border-box;">
 			</div>
 			<div style="display:flex; justify-content:space-between; gap:10px;" id="gim-footer">
 				<button id="gim-extra-btn" class="danger" style="display:none; padding:0.6rem 1rem; margin-right:auto;"></button>
