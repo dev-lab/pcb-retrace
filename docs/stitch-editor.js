@@ -1,11 +1,7 @@
 /* stitch-editor.js */
 
-// PanZoomCanvas class removed (moved to canvas-ui.js)
-
 class StitchEditor {
 	constructor(dbInstance, cvInstance) {
-        // ... (Constructor remains the same) ...
-        // It will now use the global PanZoomCanvas class
 		this.db = dbInstance;
 		this.cv = cvInstance;
 		this.modal = document.getElementById('stitch-modal');
@@ -13,26 +9,31 @@ class StitchEditor {
 		this.points = [];
 		this.colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#00ffff', '#ff00ff', '#ffffff', '#ff8800', '#88ff00'];
 
+		// FIX: We pass 'null' as the 3rd argument (onClick) to prevent adding new points.
+		// Points are only generated via setGrid() and moved via dragging.
+
 		this.viewSrc = new PanZoomCanvas('stitch-canvas-src',
 			(c, k) => this.drawPts(c, k, 's'),
-			(x, y) => this.addPt(x, y, 's'),
+			null,
 			(x, y, m, i) => this.hit(x, y, m, i, 's')
 		);
+
 		this.viewDst = new PanZoomCanvas('stitch-canvas-dst',
 			(c, k) => this.drawPts(c, k, 'd'),
-			(x, y) => this.addPt(x, y, 'd'),
+			null,
 			(x, y, m, i) => this.hit(x, y, m, i, 'd')
 		);
+
 		this.injectFlipControls();
 	}
-    
-    injectFlipControls() {
+
+	injectFlipControls() {
 		const toolbar = document.querySelector('.stitch-toolbar');
 		if(toolbar && !document.getElementById('btn-stitch-flip')) {
 			const container = document.createElement('div');
 			container.style.display = 'flex';
 			container.style.gap = '5px';
-			container.style.marginRight = 'auto'; 
+			container.style.marginRight = 'auto';
 			const btnFlip = document.createElement('button');
 			btnFlip.id = 'btn-stitch-flip';
 			btnFlip.className = 'secondary';
@@ -43,7 +44,7 @@ class StitchEditor {
 			else toolbar.appendChild(container);
 		}
 	}
-	
+
 	toggleFlip(btn) {
 		const newVal = !this.viewDst.isMirrored;
 		this.viewDst.setMirror(newVal);
@@ -96,7 +97,7 @@ class StitchEditor {
 		if (H && invH) {
 			const rect = this.getOverlapRect(
 				this.viewSrc.bmp.width, this.viewSrc.bmp.height,
-				this.viewDst.bmp.width, this.viewDst.bmp.height, 
+				this.viewDst.bmp.width, this.viewDst.bmp.height,
 				H
 			);
 			if (rect) {
@@ -148,12 +149,22 @@ class StitchEditor {
 		const bS = await createImageBitmap(i1.blob);
 		const bD = await createImageBitmap(i2.blob);
 
+		this.modal.style.display = 'flex'; // Trigger Layout
+
 		this.viewSrc.setImage(bS);
 		this.viewDst.setImage(bD);
 
+		// Reset Zoom (Delay to ensure Canvas dimensions are updated by Observer)
+		requestAnimationFrame(() => {
+			requestAnimationFrame(() => {
+				this.viewSrc.fit();
+				this.viewDst.fit();
+			});
+		});
+
 		this.points = [];
 		const existing = await this.db.getOverlapsForPair(srcImgId, dstImgId);
-		
+
 		let shouldFlip = false;
 
 		if (existing) {
@@ -194,7 +205,6 @@ class StitchEditor {
 		}
 
 		this.refresh();
-		this.modal.style.display = 'flex';
 	}
 
 	refresh() { this.viewSrc.draw(); this.viewDst.draw(); }
@@ -228,14 +238,6 @@ class StitchEditor {
 		});
 	}
 
-	addPt(x, y, side) {
-		const p = { s:{x:0,y:0}, d:{x:0,y:0}, color: this.colors[this.points.length % this.colors.length] };
-		if(side==='s') { p.s={x,y}; p.d={x:this.viewDst.bmp.width/2, y:this.viewDst.bmp.height/2}; }
-		else { p.d={x,y}; p.s={x:this.viewSrc.bmp.width/2, y:this.viewSrc.bmp.height/2}; }
-		this.points.push(p);
-		this.refresh();
-	}
-
 	hit(x, y, mode, idx, side) {
 		if(mode==='check') {
 			 for(let i=this.points.length-1; i>=0; i--) {
@@ -246,9 +248,6 @@ class StitchEditor {
 		} else if(mode==='move') {
 			const pt = (side==='s')?this.points[idx].s:this.points[idx].d;
 			pt.x+=x; pt.y+=y; this.refresh();
-		} else if(mode==='delete') {
-			const i=this.hit(x,y,'check',-1,side);
-			if(i!==-1) { this.points.splice(i,1); this.refresh(); }
 		}
 	}
 
@@ -275,4 +274,3 @@ class StitchEditor {
 		window.history.back();
 	}
 }
-

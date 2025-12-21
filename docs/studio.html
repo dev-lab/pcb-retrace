@@ -18,9 +18,9 @@
 	<script src="cv-core.js"></script>
 	<script src="stitch-editor.js"></script>
 	<script src="studio.js" defer></script>
-    <script src="canvas-ui.js"></script>
-    <script src="nets.js"></script>
-    <script src="inspector.js"></script>
+	<script src="canvas-ui.js"></script>
+	<script src="nets.js"></script>
+	<script src="inspector.js"></script>
 
 	<link rel="stylesheet" href="common.css">
 	<style>
@@ -345,6 +345,9 @@
 		/* STITCH MODAL */
 		#stitch-modal .modal-content { max-width: 95vw; height: 90vh; }
 		.stitch-split { display: flex; flex: 1; gap: 5px; overflow: hidden; background: #000; }
+		@media (orientation: portrait) {
+			.stitch-split { flex-direction: column; }
+		}
 		.stitch-pane { flex: 1; position: relative; overflow: hidden; border: 1px solid #444; }
 		.stitch-pane canvas { display: block; width: 100%; height: 100%; cursor: grab; }
 		.stitch-pane canvas:active { cursor: grabbing; }
@@ -362,39 +365,39 @@
 
 		/* Fix for Inspect Tab Layout */
 		#view-inspect {
-		    display: none;
-		    flex-direction: column;
-		    height: 100%;
-		    width: 100%;
-		    background: #0f172a;
-		    color: white;
-		    position: relative;
-		    overflow: hidden; /* Prevent body scroll bars */
+			display: none;
+			flex-direction: column;
+			height: 100%;
+			width: 100%;
+			background: #0f172a;
+			color: white;
+			position: relative;
+			overflow: hidden; /* Prevent body scroll bars */
 		}
 
 		/* When active, force flex display to enable the column layout */
 		#view-inspect.active {
-		    display: flex !important; 
+			display: flex !important;
 		}
 
 		/* Ensure the grid fills remaining space */
 		#inspect-grid {
-		    flex: 1;
-		    min-height: 0; /* Critical for nested flex scrolling/sizing */
+			flex: 1;
+			min-height: 0; /* Critical for nested flex scrolling/sizing */
 		}
 
 		/* Add to common.css or styles */
 		.net-chip {
-		    background: #e2e8f0;
-		    padding: 2px 6px;
-		    border-radius: 4px;
-		    font-size: 0.85rem;
-		    border: 1px solid #cbd5e1;
-		    cursor: pointer;
+			background: #e2e8f0;
+			padding: 2px 6px;
+			border-radius: 4px;
+			font-size: 0.85rem;
+			border: 1px solid #cbd5e1;
+			cursor: pointer;
 		}
 		.net-chip:hover {
-		    background: #cbd5e1;
-		    border-color: #94a3b8;
+			background: #cbd5e1;
+			border-color: #94a3b8;
 		}
 
 		/* DRAG & DROP OVERLAY */
@@ -699,14 +702,14 @@
 				<button class="icon-btn secondary" onclick="openBoardSettings()" title="Board Settings">✎</button>
 			</div>
 		</div>
-    	<a href="guide.html" target="_blank" class="icon-btn secondary" style="text-decoration:none; margin-left:5px; display:flex; align-items:center; justify-content:center;" title="Help / Guide">?</a>
+		<a href="guide.html" target="_blank" class="icon-btn secondary" style="text-decoration:none; margin-left:5px; display:flex; align-items:center; justify-content:center;" title="Help / Guide">?</a>
 	</div>
 
 	<div class="tabs">
 		<div id="tab-list" class="tab-btn active" onclick="switchView('list')">📋 BOM</div>
 		<div id="tab-map" class="tab-btn" onclick="switchView('map')">🖼️  Images</div>
-	    <div id="tab-nets" class="tab-btn" onclick="switchView('nets')">🕸️ Nets</div>
-    	<div id="tab-inspect" class="tab-btn" onclick="switchView('inspect')">🔍 Inspect</div>
+		<div id="tab-nets" class="tab-btn" onclick="switchView('nets')">🕸️ Nets</div>
+		<div id="tab-inspect" class="tab-btn" onclick="switchView('inspect')">🔍 Inspect</div>
 	</div>
 </header>
 
@@ -831,10 +834,10 @@
 
 	<!-- 4. INSPECT VIEW (Fixed Layout & Toolbar) -->
 	<div id="view-inspect" class="view-section">
-		
+
 		<!-- Single Floating Toolbar Container -->
 		<div id="inspect-toolbar" style="position:absolute; top:0.5rem; left:0.5rem; right:0.5rem; z-index:100; display:flex; gap:0.5rem; align-items:center; pointer-events:none;">
-			
+
 			<!-- 1. Layers Dropdown -->
 			<div style="pointer-events:auto; padding:0 0.5rem; background:rgba(255,255,255,0.95); box-shadow:0 2px 10px rgba(0,0,0,0.3); border-radius:4px; height:2rem; display:flex; align-items:center;">
 				<details id="inspect-layers-details" style="position:relative;">
@@ -847,11 +850,11 @@
 			<div id="inspect-active-net" style="pointer-events:auto; background:rgba(30, 41, 59, 0.95); padding:0 0.8rem; border-radius:4px; border:1px solid #475569; display:none; color:white; height:2rem; align-items:center; box-shadow:0 2px 5px rgba(0,0,0,0.5);">
 				<!-- Injected by JS -->
 			</div>
-			
+
 			<!-- 3. New Net Button -->
 			<button class="primary sm-btn" style="pointer-events:auto; box-shadow:0 2px 5px rgba(0,0,0,0.5); height:2rem;" onclick="inspector.startNewNet()">+ New Net</button>
 		</div>
-		
+
 		<!-- Full Screen Grid -->
 		<div id="inspect-grid">
 			<div style="display:flex; align-items:center; justify-content:center; color:#64748b; height:100%;">Select layers to inspect</div>
@@ -931,7 +934,7 @@
 		</div>
 		<div class="stitch-toolbar" style="display:flex; align-items:center; gap:8px;">
 			<!-- JS Injects Flip Button on Left -->
-			
+
 			<div style="flex:1; text-align:center;">
 				<button class="secondary sm-btn" onclick="stitchEditor.setGrid(2)" title="Set 4 Points (Corners)">Grid 2x2</button>
 				<button class="secondary sm-btn" onclick="stitchEditor.setGrid(3)" title="Set 9 Points (Recommended)">Grid 3x3</button>
@@ -1039,6 +1042,27 @@
 			<div style="margin-top:0.5rem; display:flex; justify-content:space-between; align-items:center;">
 				<button class="danger" style="padding:0.6rem 1.2rem;" onclick="deleteCurrentImage()">Delete Image</button>
 				<button class="primary" style="padding:0.6rem 1.2rem;" onclick="saveImageSettings()">Save</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+<!-- GENERIC INPUT MODAL -->
+<div style="display:none; z-index:1150;" id="generic-input-modal" class="modal-overlay">
+	<div class="modal-content" style="height:auto; max-width:300px; background:#fff; border:1px solid #cbd5e1;">
+		<div class="modal-header">
+			<h3 style="margin:0" id="gim-title">Input</h3>
+			<button class="close-btn" onclick="document.getElementById('generic-input-modal').style.display='none'">×</button>
+		</div>
+		<div style="padding:1.5rem; display:flex; flex-direction:column; gap:1rem;">
+			<div>
+				<label id="gim-label" style="font-size:0.8rem; font-weight:700; color:#64748b; text-transform:uppercase; margin-bottom:0.2rem; display:block;">Value</label>
+				<input type="text" id="gim-input" style="width:100%; padding:0.6rem; border:1px solid #cbd5e1; border-radius:0.3rem; font-size:1rem;">
+			</div>
+			<div style="display:flex; justify-content:space-between; gap:10px;" id="gim-footer">
+				<button id="gim-extra-btn" class="danger" style="display:none; padding:0.6rem 1rem; margin-right:auto;"></button>
+				<button id="gim-cancel-btn" class="secondary" style="padding:0.6rem 1rem;">Cancel</button>
+				<button id="gim-ok-btn" class="primary" style="padding:0.6rem 1rem;">OK</button>
 			</div>
 		</div>
 	</div>
@@ -1176,7 +1200,7 @@ const ImageImporter = {
 	sourceImage: null,
 	currentRotation: 0,
 	isCameraSession: false,
-	
+
 	// View State (Zoom/Pan)
 	view: { scale: 1, x: 0, y: 0 },
 	lastDist: 0, // For pinch zoom
@@ -1194,13 +1218,13 @@ const ImageImporter = {
 		const start = (e) => this.handleDragStart(e);
 		const move = (e) => this.handleDragMove(e);
 		const end = () => this.handleDragEnd();
-		
+
 		this.canvas.addEventListener('mousedown', start);
 		this.canvas.addEventListener('touchstart', start, {passive: false});
-		
+
 		window.addEventListener('mousemove', move);
 		window.addEventListener('touchmove', move, {passive: false});
-		
+
 		window.addEventListener('mouseup', end);
 		window.addEventListener('touchend', end);
 
@@ -1298,7 +1322,7 @@ const ImageImporter = {
 		this.canvas.height = this.video.videoHeight;
 		this.canvas.getContext('2d').drawImage(this.video, 0, 0);
 		this.stopStream();
-		
+
 		const now = new Date();
 		const ts = now.toISOString().replace(/[-:T]/g, '').slice(0, 14);
 		this.nameInput.value = `IMG_${ts}`;
@@ -1381,7 +1405,7 @@ const ImageImporter = {
 	handleDragStart: function(e) {
 		// Pinch Start (Mobile Zoom)
 		if (e.type === 'touchstart' && e.touches.length > 1) {
-			this.isDragging = false; 
+			this.isDragging = false;
 			this.isPanning = false;
 			const dx = e.touches[0].clientX - e.touches[1].clientX;
 			const dy = e.touches[0].clientY - e.touches[1].clientY;
@@ -1499,10 +1523,10 @@ const ImageImporter = {
 		let name = this.nameInput.value.trim() || "New Image";
 		name = name.replace(/\.(jpg|jpeg|png)$/i, "");
 		const rect = this.cropRect;
-		
+
 		// Clean up view before saving (so render is pure)
 		this.cropRect = null;
-		this.resetView(); 
+		this.resetView();
 		this.render();
 
 		let finalCanvas = this.canvas;
