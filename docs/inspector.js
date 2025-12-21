@@ -71,12 +71,18 @@ class Inspector {
 	}
 
 	async renderGrid() {
-		// --- 1. Snapshot State (Zoom/Pan) ---
+		// 1. Snapshot State
+		// We save state ONLY if the viewer exists.
+		// We also capture 'interacted' status to know if we should restore specific zoom or just auto-fit.
 		const savedStates = {};
 		if (this.viewers) {
 			Object.entries(this.viewers).forEach(([id, v]) => {
-				// We clone the object to ensure safety, though not strictly required
-				if (v.t) savedStates[id] = { ...v.t };
+				if (v.t) {
+					savedStates[id] = {
+						t: { ...v.t },
+						interacted: v.userInteracted || false // Capture the flag from the instance
+					};
+				}
 			});
 		}
 
@@ -131,13 +137,12 @@ class Inspector {
 			this.grid.appendChild(cell);
 
 			let wasActiveBeforeDown = false;
+			let stateRestored = false;
 
 			const viewer = new PanZoomCanvas(cvs.id,
 				(ctx, k) => this.drawOverlay(id, ctx, k),
-
 				async (x, y, e) => {
 					if (e.button !== 0) return;
-
 					if (wasActiveBeforeDown) {
 						const hit = await this.handleNodeClick(id, x, y);
 						if (!hit) {
@@ -150,10 +155,16 @@ class Inspector {
 				}
 			);
 
+			// Initialize interaction flag on the instance
+			viewer.userInteracted = false;
+
+			// --- EVENT HANDLERS ---
+
 			viewer.onPointerDown = (e) => {
+				viewer.userInteracted = true; // Mark as dirty/manual
+
 				if (e.isPrimary || e.button === 0) {
 					wasActiveBeforeDown = (this.masterId === id);
-
 					if (this.masterId !== id) {
 						this.masterId = id;
 					}
@@ -162,9 +173,32 @@ class Inspector {
 				}
 			};
 
+			// Detect wheel usage to stop auto-fit
+			cvs.addEventListener('wheel', () => { viewer.userInteracted = true; });
+
 			viewer.onMouseMove = (x, y) => {
 				if(this.masterId === id) this.syncCursors(id, x, y);
 			};
+
+			// --- SMART RESIZE/FIT LOGIC ---
+			const updateView = () => {
+				if (!viewer.bmp || cvs.width < 20 || cvs.height < 20) return;
+
+				// 1. Restore State (Only if user had manually interacted before)
+				if (savedStates[id] && savedStates[id].interacted && !stateRestored) {
+					viewer.t = savedStates[id].t;
+					stateRestored = true;
+					viewer.userInteracted = true; // Keep it marked as manual
+					viewer.draw();
+				}
+				// 2. Auto-Fit (Default behavior, continues on resize until user interacts)
+				else if (!viewer.userInteracted) {
+					viewer.fit();
+				}
+			};
+
+			// Attempt fit on Resize
+			viewer.onResize = (w, h) => updateView();
 
 			cvs.addEventListener('contextmenu', (e) => {
 				e.preventDefault(); e.stopPropagation();
@@ -180,18 +214,9 @@ class Inspector {
 			try {
 				const bmp = await createImageBitmap(imgRec.blob);
 				viewer.setImage(bmp);
-				if (cell.clientWidth && cell.clientHeight) {
-					viewer.canvas.width = cell.clientWidth;
-					viewer.canvas.height = cell.clientHeight;
-				}
 
-				// --- 2. Restore State or Fit ---
-				if (savedStates[id]) {
-					viewer.t = savedStates[id];
-					viewer.draw(); // Force redraw with restored transform
-				} else {
-					viewer.fit();
-				}
+				// Attempt fit on Load
+				updateView();
 
 				if(imgRec.name.toLowerCase().includes('bot') && !imgRec.name.toLowerCase().includes('top')) {
 					viewer.setMirror(true);

@@ -1,4 +1,4 @@
-/* canvas-ui.js - Shared Canvas Logic (Mobile/Touch Ready) */
+/* canvas-ui.js - Shared Canvas Logic (Mobile/Touch Ready + Resize Hook) */
 
 class PanZoomCanvas {
 	constructor(id, onDraw, onClick, onDragPt) {
@@ -17,7 +17,10 @@ class PanZoomCanvas {
 		this.onClick = onClick;
 		this.onDragPt = onDragPt;
 		this.onMouseMove = null;
-		this.onPointerDown = null; // New Hook
+		this.onPointerDown = null;
+
+		// New: Resize Callback hook
+		this.onResize = null;
 
 		this.evCache = [];
 		this.prevDiff = -1;
@@ -30,6 +33,8 @@ class PanZoomCanvas {
 					this.canvas.width = this.container.clientWidth;
 					this.canvas.height = this.container.clientHeight;
 					this.draw();
+					// Trigger Hook
+					if (this.onResize) this.onResize(this.canvas.width, this.canvas.height);
 				}
 			}).observe(this.container);
 			this.initEvents();
@@ -75,7 +80,6 @@ class PanZoomCanvas {
 		this.evCache.push(e);
 		this.totalDragDist = 0;
 
-		// Trigger Hook if defined (Before internal logic)
 		if (this.onPointerDown) this.onPointerDown(e);
 
 		const coords = this.getImgCoords(e.clientX, e.clientY);
@@ -100,7 +104,6 @@ class PanZoomCanvas {
 		if (index > -1) this.evCache[index] = e;
 
 		if (this.evCache.length === 2) {
-			// Pinch Zoom
 			const dx = this.evCache[0].clientX - this.evCache[1].clientX;
 			const dy = this.evCache[0].clientY - this.evCache[1].clientY;
 			const curDiff = Math.hypot(dx, dy);
@@ -112,14 +115,13 @@ class PanZoomCanvas {
 				this.zoomAt(cx, cy, factor);
 			}
 			this.prevDiff = curDiff;
-			this.totalDragDist += 20; // Ensure pinch doesn't trigger click
+			this.totalDragDist += 20;
 			return;
 		}
 
 		if (this.isDragging && this.evCache.length === 1) {
 			const dx = e.clientX - this.lm.x;
 			const dy = e.clientY - this.lm.y;
-
 			this.totalDragDist += Math.hypot(dx, dy);
 
 			if (this.activePtIdx !== -1) {
@@ -146,7 +148,6 @@ class PanZoomCanvas {
 		if (this.evCache.length < 2) this.prevDiff = -1;
 
 		if (this.evCache.length === 0) {
-			// Threshold increased to 20px for mobile tap tolerance
 			if (this.totalDragDist < 20) {
 				if (this.activePtIdx === -1 && this.onClick) {
 					const coords = this.getImgCoords(e.clientX, e.clientY);
