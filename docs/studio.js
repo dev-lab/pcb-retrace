@@ -352,7 +352,7 @@ async function saveBoardSettings() {
 	if (newName) {
 		p.name = newName; p.section = newSec; p.deviceId = newDevId;
 		await db.addProject(p);
-		document.getElementById('board-settings-modal').style.display = 'none';
+		history.back();
 		if (newDevId !== currentDeviceId) {
 			currentDeviceId = newDevId;
 			updateDeviceDropdown();
@@ -377,7 +377,7 @@ async function saveDeviceSettings() {
 		deviceList = await db.getDevices();
 		updateDeviceDropdown();
 	}
-	document.getElementById('device-settings-modal').style.display = 'none';
+	history.back();
 }
 async function deleteCurrentDevice() {
 	if (!currentDeviceId) return;
@@ -402,7 +402,7 @@ async function deleteCurrentDevice() {
 		}
 
 		await db._tx('devices', 'readwrite', s => s.delete(currentDeviceId));
-		document.getElementById('device-settings-modal').style.display = 'none';
+		history.back();
 
 		deviceList = await db.getDevices();
 		if (deviceList.length === 0) {
@@ -1268,7 +1268,7 @@ async function deleteBom() {
 	if(bomList.length < 1) return;
 	if(await confirmAction("Delete this Board and all its content?", "Delete Board")){
 		await db.deleteProject(currentBomId);
-		document.getElementById('board-settings-modal').style.display = 'none';
+		history.back();
 		await loadDeviceBoms();
 		resetStickyEditor();
 	}
@@ -1544,7 +1544,7 @@ async function saveImageSettings() {
 		if(connName) connName.innerText = newName;
 	}
 
-	document.getElementById('image-settings-modal').style.display = 'none';
+	history.back();
 }
 
 // Delete Image (Close modal on success)
@@ -1565,7 +1565,7 @@ async function deleteCurrentImage() {
 		bomImages = bomImages.filter(i => i.id !== currentImgId);
 
 		// Close the settings modal if open
-		document.getElementById('image-settings-modal').style.display = 'none';
+		history.back();
 
 		currentImgId = null;
 		await loadProjectData();

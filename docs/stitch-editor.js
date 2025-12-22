@@ -9,9 +9,6 @@ class StitchEditor {
 		this.points = [];
 		this.colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#00ffff', '#ff00ff', '#ffffff', '#ff8800', '#88ff00'];
 
-		// FIX: We pass 'null' as the 3rd argument (onClick) to prevent adding new points.
-		// Points are only generated via setGrid() and moved via dragging.
-
 		this.viewSrc = new PanZoomCanvas('stitch-canvas-src',
 			(c, k) => this.drawPts(c, k, 's'),
 			null,
@@ -50,6 +47,15 @@ class StitchEditor {
 		this.viewDst.setMirror(newVal);
 		btn.style.background = newVal ? '#e0f2fe' : '';
 		btn.style.borderColor = newVal ? '#2563eb' : '';
+
+		// FIX: Invert point coordinates so they stay visually in place
+		if (this.viewDst.bmp) {
+			const w = this.viewDst.bmp.width;
+			this.points.forEach(p => {
+				p.d.x = w - p.d.x;
+			});
+		}
+
 		this.refresh();
 	}
 
@@ -119,6 +125,13 @@ class StitchEditor {
 		}
 		const sGrid = this.getGridCoords(this.viewSrc.bmp.width, this.viewSrc.bmp.height, n);
 		const dGrid = this.getGridCoords(this.viewDst.bmp.width, this.viewDst.bmp.height, n);
+
+		// Adjust destination grid for mirroring so visual position matches
+		if (this.viewDst.isMirrored) {
+			const w = this.viewDst.bmp.width;
+			dGrid.forEach(p => { p.x = w - p.x; });
+		}
+
 		for(let i=0; i<sGrid.length; i++) {
 			this.points.push({ s: sGrid[i], d: dGrid[i], color: this.colors[i % this.colors.length] });
 		}
@@ -149,12 +162,11 @@ class StitchEditor {
 		const bS = await createImageBitmap(i1.blob);
 		const bD = await createImageBitmap(i2.blob);
 
-		this.modal.style.display = 'flex'; // Trigger Layout
+		this.modal.style.display = 'flex';
 
 		this.viewSrc.setImage(bS);
 		this.viewDst.setImage(bD);
 
-		// Reset Zoom (Delay to ensure Canvas dimensions are updated by Observer)
 		requestAnimationFrame(() => {
 			requestAnimationFrame(() => {
 				this.viewSrc.fit();
@@ -167,6 +179,39 @@ class StitchEditor {
 
 		let shouldFlip = false;
 
+		// 1. Determine Flip State
+		if (existing) {
+			if (existing.isManual && existing.manualPoints) {
+				const pointsForSolve = existing.manualPoints.map(p => {
+					// Ensure order is src->dst for solve
+					return (existing.fromImageId === this.srcId) ? {s:p.s, d:p.d} : {s:p.d, d:p.s};
+				});
+				if (pointsForSolve.length >= 3) {
+					const tempRes = this.cv.solveManual(pointsForSolve);
+					if (tempRes && this.isReflection(tempRes.hData)) {
+						shouldFlip = true;
+					}
+				}
+			} else if (!existing.isManual && existing.homography) {
+				let hToUse = existing.homography;
+				if (existing.fromImageId !== this.srcId) {
+					hToUse = existing.inverseHomography;
+				}
+				if (this.isReflection(hToUse)) {
+					shouldFlip = true;
+				}
+			}
+		}
+
+		// 2. Apply Flip State BEFORE generating points
+		this.viewDst.setMirror(shouldFlip);
+		const flipBtn = document.getElementById('btn-stitch-flip');
+		if(flipBtn) {
+			flipBtn.style.background = shouldFlip ? '#e0f2fe' : '';
+			flipBtn.style.borderColor = shouldFlip ? '#2563eb' : '';
+		}
+
+		// 3. Generate Points
 		if (existing) {
 			if (existing.isManual && existing.manualPoints) {
 				existing.manualPoints.forEach((p, i) => {
@@ -175,12 +220,6 @@ class StitchEditor {
 					else { ptS=p.d; ptD=p.s; }
 					this.points.push({ s: {x:ptS.x, y:ptS.y}, d: {x:ptD.x, y:ptD.y}, color: this.colors[i % this.colors.length] });
 				});
-				if (this.points.length >= 3) {
-					const tempRes = this.cv.solveManual(this.points);
-					if (tempRes && this.isReflection(tempRes.hData)) {
-						shouldFlip = true;
-					}
-				}
 			} else if (!existing.isManual && existing.homography) {
 				let hToUse = existing.homography;
 				let invHToUse = existing.inverseHomography;
@@ -188,20 +227,11 @@ class StitchEditor {
 					hToUse = existing.inverseHomography;
 					invHToUse = existing.homography;
 				}
-				if (this.isReflection(hToUse)) {
-					shouldFlip = true;
-				}
 				this.setGrid(3, hToUse, invHToUse);
 			}
 		} else {
-			this.setGrid(3);
-		}
-
-		this.viewDst.setMirror(shouldFlip);
-		const flipBtn = document.getElementById('btn-stitch-flip');
-		if(flipBtn) {
-			flipBtn.style.background = shouldFlip ? '#e0f2fe' : '';
-			flipBtn.style.borderColor = shouldFlip ? '#2563eb' : '';
+			// FIX: Default to 2x2 (4 points) for fresh stitch
+			this.setGrid(2);
 		}
 
 		this.refresh();
@@ -242,12 +272,16 @@ class StitchEditor {
 		if(mode==='check') {
 			 for(let i=this.points.length-1; i>=0; i--) {
 				 const pt = (side==='s')?this.points[i].s:this.points[i].d;
+				 // FIX: Use raw image coordinates (PanZoomCanvas handles mirror logic in getImgCoords)
 				 if(Math.hypot(x-pt.x, y-pt.y) < 20) return i;
 			 }
 			 return -1;
 		} else if(mode==='move') {
 			const pt = (side==='s')?this.points[idx].s:this.points[idx].d;
-			pt.x+=x; pt.y+=y; this.refresh();
+			// FIX: Standard addition works because getImgCoords returns inverted delta for mirrored images
+			pt.x += x;
+			pt.y += y;
+			this.refresh();
 		}
 	}
 
