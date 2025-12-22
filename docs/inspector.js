@@ -13,32 +13,59 @@ class Inspector {
 		this.activeNet = null;
 		this.masterId = null;
 		this.netNodeCache = {}; // Cache for calculated node positions
+
+		// Cache for image dimensions to avoid async bitmap creation on every render
+		this.resolutionCache = {};
+
+		// Initialization State Lock
+		this.initPromise = null;
+		this.needsSync = false;
 	}
 
+	async getImageResolution(img) {
+		if (!img || !img.blob) return { w: 0, h: 0 };
+		if (this.resolutionCache[img.id]) return this.resolutionCache[img.id];
+		try {
+			const bmp = await createImageBitmap(img.blob);
+			const res = { w: bmp.width, h: bmp.height };
+			bmp.close();
+			this.resolutionCache[img.id] = res;
+			return res;
+		} catch (e) { return { w: 0, h: 0 }; }
+	}
+
+	// Wrapper to prevent race conditions when switchView calls init()
+	// and loadNet() is called immediately after
 	async init() {
+		if (this.initPromise) return this.initPromise;
+		this.initPromise = this._performInit();
+		try {
+			await this.initPromise;
+		} finally {
+			this.initPromise = null;
+		}
+	}
+
+	async _performInit() {
 		this.sidebarList.innerHTML = '';
 
-		// Hide the "+ New Net" button for now
-		// We find it by the onclick attribute since it doesn't have an ID in the HTML
 		const newNetBtn = document.querySelector('button[onclick="inspector.startNewNet()"]');
 		if(newNetBtn) newNetBtn.style.display = 'none';
 
-		const imgs = [...bomImages].sort((a,b) => {
+		const sortedImgs = [...bomImages].sort((a,b) => {
 			const nA = a.name.toLowerCase(), nB = b.name.toLowerCase();
 			if(nA.includes('top')) return -1;
 			if(nB.includes('top')) return 1;
 			return nA.localeCompare(nB);
 		});
 
-		// Checkbox Layout
-		imgs.forEach(img => {
+		sortedImgs.forEach(img => {
 			const row = document.createElement('div');
-			// Force Grid layout for strict alignment of checkbox vs label
 			row.style.cssText = "display:grid; grid-template-columns: 20px 1fr; align-items:center; gap:5px; color:#334155; font-size:0.85rem; border-bottom:1px solid #f1f5f9; padding-bottom:4px;";
 
 			const chk = document.createElement('input');
 			chk.type = 'checkbox';
-			chk.checked = this.visibleIds.has(img.id);
+			chk.dataset.id = img.id;
 			chk.onchange = () => this.toggleLayer(img.id, chk.checked);
 
 			const label = document.createElement('span');
@@ -51,38 +78,97 @@ class Inspector {
 			this.sidebarList.appendChild(row);
 		});
 
-		// Smart Default Selection
 		if(this.visibleIds.size === 0) {
 			const isDesktop = window.matchMedia("(min-width: 800px)").matches;
+			const nextVisible = new Set();
+
 			if (isDesktop) {
-				imgs.forEach(img => this.visibleIds.add(img.id));
+				sortedImgs.forEach(img => nextVisible.add(img.id));
 			} else {
-				if (imgs.length > 0) this.visibleIds.add(imgs[0].id);
-				if (imgs.length > 1) this.visibleIds.add(imgs[1].id);
+				await this.selectBestMobilePair(sortedImgs, nextVisible);
 			}
-			// Sync UI
-			Array.from(this.sidebarList.querySelectorAll('input')).forEach((chk, i) => {
-				chk.checked = this.visibleIds.has(imgs[i].id);
+
+			this.visibleIds = nextVisible;
+			Array.from(this.sidebarList.querySelectorAll('input')).forEach(chk => {
+				chk.checked = this.visibleIds.has(chk.dataset.id);
+			});
+		} else {
+			Array.from(this.sidebarList.querySelectorAll('input')).forEach(chk => {
+				chk.checked = this.visibleIds.has(chk.dataset.id);
 			});
 		}
 
 		this.updateNetUI();
-		this.renderGrid();
+		await this.renderGrid();
+	}
+
+	async selectBestMobilePair(sortedImgs, selectionSet) {
+		let topCand = [], botCand = [], otherCand = [];
+
+		for (const img of sortedImgs) {
+			const n = img.name.toLowerCase();
+			if (n.includes('top') || n.includes('front')) topCand.push(img);
+			else if (n.includes('bot') || n.includes('back')) botCand.push(img);
+			else otherCand.push(img);
+		}
+
+		let bestPair = null;
+		let maxCombinedRes = 0;
+
+		if (topCand.length > 0 && botCand.length > 0) {
+			for (const t of topCand) {
+				const paths = await ImageGraph.solvePaths(t.id, this.cv, this.db);
+				const reachableIds = new Set(paths.map(p => p.id));
+				const resT = await this.getImageResolution(t);
+				const pxT = resT.w * resT.h;
+
+				for (const b of botCand) {
+					if (reachableIds.has(b.id)) {
+						const resB = await this.getImageResolution(b);
+						const totalPx = pxT + (resB.w * resB.h);
+						if (totalPx > maxCombinedRes) {
+							maxCombinedRes = totalPx;
+							bestPair = [t, b];
+						}
+					}
+				}
+			}
+		}
+
+		if (!bestPair) {
+			const pickBest = async (list) => {
+				if (list.length === 0) return null;
+				let best = list[0];
+				let maxP = 0;
+				for (const i of list) {
+					const r = await this.getImageResolution(i);
+					if ((r.w * r.h) > maxP) { maxP = r.w * r.h; best = i; }
+				}
+				return best;
+			};
+			const t = await pickBest(topCand);
+			const b = await pickBest(botCand);
+			if (t) selectionSet.add(t.id);
+			if (b) selectionSet.add(b.id);
+		} else {
+			selectionSet.add(bestPair[0].id);
+			selectionSet.add(bestPair[1].id);
+		}
+
+		if (selectionSet.size < 2) {
+			const others = [...topCand, ...botCand, ...otherCand].filter(x => !selectionSet.has(x.id));
+			for (const o of others) {
+				if (selectionSet.size >= 2) break;
+				selectionSet.add(o.id);
+			}
+		}
 	}
 
 	async renderGrid() {
-		// 1. Snapshot State
-		// We save state ONLY if the viewer exists.
-		// We also capture 'interacted' status to know if we should restore specific zoom or just auto-fit.
 		const savedStates = {};
 		if (this.viewers) {
 			Object.entries(this.viewers).forEach(([id, v]) => {
-				if (v.t) {
-					savedStates[id] = {
-						t: { ...v.t },
-						interacted: v.userInteracted || false // Capture the flag from the instance
-					};
-				}
+				if (v.t) savedStates[id] = { t: { ...v.t }, interacted: v.userInteracted || false };
 			});
 		}
 
@@ -94,24 +180,54 @@ class Inspector {
 			return;
 		}
 
-		// Grid Layout
+		// --- SMART GRID CALCULATION (Aspect Ratio Aware) ---
+		const count = this.visibleIds.size;
+		const rect = this.grid.getBoundingClientRect();
+		const width = rect.width || window.innerWidth;
+		const height = rect.height || window.innerHeight;
+
+		// 1. Calculate Average Aspect Ratio
+		let totalAR = 0;
+		let validARCount = 0;
+		for (const id of this.visibleIds) {
+			const imgRec = bomImages.find(i => i.id === id);
+			if (imgRec) {
+				const res = await this.getImageResolution(imgRec);
+				if (res.w > 0 && res.h > 0) {
+					totalAR += (res.w / res.h);
+					validARCount++;
+				}
+			}
+		}
+		const avgAR = (validARCount > 0) ? (totalAR / validARCount) : 1.5;
+
+		// 2. Solve for Best Layout (Maximize Scale)
+		let bestCols = 1;
+		let maxScale = 0;
+
+		for (let c = 1; c <= count; c++) {
+			const r = Math.ceil(count / c);
+			const cellW = width / c;
+			const cellH = height / r;
+			const scale = Math.min(cellW / avgAR, cellH);
+
+			if (scale > maxScale) {
+				maxScale = scale;
+				bestCols = c;
+			}
+		}
+
+		const cols = bestCols;
+		const rows = Math.ceil(count / cols);
+
 		this.grid.style.display = 'grid';
 		this.grid.style.width = '100%';
 		this.grid.style.height = '100%';
 		this.grid.style.boxSizing = 'border-box';
 		this.grid.style.gap = '2px';
 		this.grid.style.background = '#000';
-
-		const count = this.visibleIds.size;
-		const isPortrait = window.innerHeight > window.innerWidth;
-
-		if (isPortrait) {
-			this.grid.style.gridTemplateColumns = '1fr';
-			this.grid.style.gridTemplateRows = `repeat(${count}, 1fr)`;
-		} else {
-			this.grid.style.gridTemplateColumns = (count > 1) ? '1fr 1fr' : '1fr';
-			this.grid.style.gridTemplateRows = (count > 2) ? '1fr 1fr' : '1fr';
-		}
+		this.grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+		this.grid.style.gridTemplateRows = `repeat(${rows}, minmax(0, 1fr))`;
 
 		if(!this.masterId || !this.visibleIds.has(this.masterId)) {
 			this.masterId = this.visibleIds.values().next().value;
@@ -122,11 +238,11 @@ class Inspector {
 			if(!imgRec) continue;
 
 			const cell = document.createElement('div');
-			cell.style.cssText = "position:relative; overflow:hidden; border:1px solid #334155; background:#000; width:100%; height:100%;";
+			cell.style.cssText = "position:relative; overflow:hidden; border:1px solid #334155; background:#000; width:100%; height:100%; min-width:0; min-height:0;";
 
 			const cvs = document.createElement('canvas');
 			cvs.id = `inspect-cvs-${id}`;
-			cvs.style.display = 'block';
+			cvs.style.cssText = "display:block; position:absolute; top:0; left:0; width:100%; height:100%;";
 			cell.appendChild(cvs);
 
 			const lbl = document.createElement('div');
@@ -150,54 +266,77 @@ class Inspector {
 						}
 					}
 				},
-				(dx, dy, mode) => {
-					if(mode === 'check') return -1;
+				// Drag Handler
+				(dx, dy, mode, idx) => {
+					if (!this.activeNet) return -1;
+					if (mode === 'check') {
+						const cache = this.netNodeCache[id];
+						if (!cache) return -1;
+						// Only allow dragging Source (Blue) nodes
+						const foundIdx = cache.findIndex(n => {
+							if (!n.isSource) return false;
+							const dist = Math.hypot(n.x - dx, n.y - dy);
+							return (dist * viewer.t.k) < 20;
+						});
+						return foundIdx;
+					} else if (mode === 'move') {
+						const n = this.netNodeCache[id][idx];
+						if (n && n.origNode) {
+							// Update Data Model
+							n.origNode.x += dx;
+							n.origNode.y += dy;
+							// Update Visual Cache
+							n.x += dx;
+							n.y += dy;
+							viewer.draw();
+							this.needsSync = true;
+						}
+					}
 				}
 			);
 
-			// Initialize interaction flag on the instance
 			viewer.userInteracted = false;
 
-			// --- EVENT HANDLERS ---
-
 			viewer.onPointerDown = (e) => {
-				viewer.userInteracted = true; // Mark as dirty/manual
-
+				viewer.userInteracted = true;
 				if (e.isPrimary || e.button === 0) {
 					wasActiveBeforeDown = (this.masterId === id);
 					if (this.masterId !== id) {
 						this.masterId = id;
+						this.syncCursors(id, null, null, true);
 					}
 					const pt = viewer.getImgCoords(e.clientX, e.clientY);
 					this.syncCursors(id, pt.x, pt.y);
 				}
 			};
 
-			// Detect wheel usage to stop auto-fit
+			// Trigger re-projection when drag ends
+			cvs.addEventListener('pointerup', () => {
+				if(this.needsSync) {
+					this.updateNetNodeCache();
+					this.needsSync = false;
+				}
+			});
+
 			cvs.addEventListener('wheel', () => { viewer.userInteracted = true; });
 
 			viewer.onMouseMove = (x, y) => {
 				if(this.masterId === id) this.syncCursors(id, x, y);
 			};
 
-			// --- SMART RESIZE/FIT LOGIC ---
 			const updateView = () => {
 				if (!viewer.bmp || cvs.width < 20 || cvs.height < 20) return;
-
-				// 1. Restore State (Only if user had manually interacted before)
 				if (savedStates[id] && savedStates[id].interacted && !stateRestored) {
 					viewer.t = savedStates[id].t;
 					stateRestored = true;
-					viewer.userInteracted = true; // Keep it marked as manual
+					viewer.userInteracted = true;
 					viewer.draw();
 				}
-				// 2. Auto-Fit (Default behavior, continues on resize until user interacts)
 				else if (!viewer.userInteracted) {
 					viewer.fit();
 				}
 			};
 
-			// Attempt fit on Resize
 			viewer.onResize = (w, h) => updateView();
 
 			cvs.addEventListener('contextmenu', (e) => {
@@ -214,8 +353,6 @@ class Inspector {
 			try {
 				const bmp = await createImageBitmap(imgRec.blob);
 				viewer.setImage(bmp);
-
-				// Attempt fit on Load
 				updateView();
 
 				if(imgRec.name.toLowerCase().includes('bot') && !imgRec.name.toLowerCase().includes('top')) {
@@ -224,6 +361,7 @@ class Inspector {
 			} catch(e) { console.error("Inspector img load error", e); }
 		}
 		this.updateNetNodeCache();
+		if (this.masterId) this.syncCursors(this.masterId, null, null, true);
 	}
 
 	async handleNodeClick(imgId, x, y) {
@@ -238,18 +376,15 @@ class Inspector {
 		});
 
 		if (hit) {
-			// Use generic input with a special Delete button
 			const res = await requestInput("Edit Node", "Node Name", hit.label, {
 				extraBtn: { label: 'Delete', value: '__DELETE__', class: 'danger' }
 			});
-
 			if (res === '__DELETE__') {
 				const idx = this.activeNet.nodes.indexOf(hit.origNode);
 				if (idx > -1) this.activeNet.nodes.splice(idx, 1);
 			} else if (res) {
 				hit.origNode.label = res;
 			}
-
 			if (res) {
 				this.updateNetUI();
 				Object.values(this.viewers).forEach(v => v.draw());
@@ -265,18 +400,17 @@ class Inspector {
 		this.renderGrid();
 	}
 
-	// Load an existing net for editing
-	loadNet(net) {
-		// Deep copy to ensure "Cancel" works (discarding changes)
+	async loadNet(net) {
+		// Wait for initialization to complete if triggered by switchView()
+		if (this.initPromise) {
+			await this.initPromise;
+		}
+
 		this.activeNet = JSON.parse(JSON.stringify(net));
 		this.updateNetUI();
 
-		// Ensure pins are visible immediately
-		// We might need to ensure grid is rendered if not already
 		if(Object.keys(this.viewers).length === 0) {
-			this.renderGrid().then(() => {
-				Object.values(this.viewers).forEach(v => v.draw());
-			});
+			await this.renderGrid();
 		} else {
 			Object.values(this.viewers).forEach(v => v.draw());
 		}
@@ -285,13 +419,9 @@ class Inspector {
 	async updateNetNodeCache() {
 		this.netNodeCache = {};
 		if (!this.activeNet || !this.activeNet.nodes) return;
-
-		// Initialize cache arrays for visible viewers
 		for (const vid of this.visibleIds) this.netNodeCache[vid] = [];
 
-		// Process each node in the net
 		for (const node of this.activeNet.nodes) {
-			// 1. Add directly to the source image (Blue)
 			if (this.visibleIds.has(node.imgId)) {
 				this.netNodeCache[node.imgId].push({
 					x: node.x, y: node.y, label: node.label,
@@ -299,10 +429,7 @@ class Inspector {
 				});
 			}
 
-			// 2. Project to other visible images (Green)
-			// We need paths from the node's image to all other visible images
 			const paths = await ImageGraph.solvePaths(node.imgId, this.cv, this.db);
-
 			for (const p of paths) {
 				if (this.visibleIds.has(p.id)) {
 					const proj = this.cv.projectPoint(node.x, node.y, p.H);
@@ -315,12 +442,19 @@ class Inspector {
 				}
 			}
 		}
-		// Redraw all to show changes
 		Object.values(this.viewers).forEach(v => v.draw());
 	}
 
-	async syncCursors(masterId, mx, my) {
-		this.cursorState = { masterId, mx, my };
+	async syncCursors(masterId, mx, my, forceRefresh = false) {
+		if (mx !== null && my !== null) {
+			this.cursorState = { masterId, mx, my };
+		} else if (!forceRefresh && !this.cursorState) {
+			return;
+		}
+
+		const path = await ImageGraph.solvePaths(masterId, this.cv, this.db);
+		const connectedIds = new Set(path.map(p => p.id));
+		connectedIds.add(masterId);
 
 		for(const [id, viewer] of Object.entries(this.viewers)) {
 			if(id === masterId) {
@@ -329,39 +463,40 @@ class Inspector {
 				continue;
 			}
 
-			const path = await ImageGraph.solvePaths(masterId, this.cv, this.db);
+			if(!connectedIds.has(id)) {
+				viewer.cursorPos = null;
+				viewer.setDimmed(true);
+				viewer.draw();
+				continue;
+			}
+
 			const targetPath = path.find(p => p.id === id);
 
-			if(targetPath) {
+			if (mx !== null && my !== null && targetPath) {
 				const pt = this.cv.projectPoint(mx, my, targetPath.H);
 				if(pt) {
 					viewer.cursorPos = pt;
-
 					const w = viewer.bmp ? viewer.bmp.width : 1000;
 					const h = viewer.bmp ? viewer.bmp.height : 1000;
-					const inside = (pt.x >= 0 && pt.y >= 0 && pt.x <= w && pt.y <= h);
 
+					const inside = (pt.x >= 0 && pt.y >= 0 && pt.x <= w && pt.y <= h);
 					viewer.setDimmed(!inside);
 
 					if (inside && viewer.bmp) {
 						const k = viewer.t.k;
 						const tx = viewer.t.x;
 						const ty = viewer.t.y;
-
 						const imgX = viewer.isMirrored ? (w - pt.x) : pt.x;
 						const screenX = imgX * k + tx;
 						const screenY = pt.y * k + ty;
-
 						const cvsW = viewer.canvas.width;
 						const cvsH = viewer.canvas.height;
 						const padX = cvsW * 0.25;
 						const padY = cvsH * 0.25;
 
-						let dx = 0; let dy = 0;
-
+						let dx = 0, dy = 0;
 						if (screenX > cvsW - padX) dx = (cvsW - padX) - screenX;
 						else if (screenX < padX) dx = padX - screenX;
-
 						if (screenY > cvsH - padY) dy = (cvsH - padY) - screenY;
 						else if (screenY < padY) dy = padY - screenY;
 
@@ -375,8 +510,7 @@ class Inspector {
 					viewer.setDimmed(true);
 				}
 			} else {
-				viewer.cursorPos = null;
-				viewer.setDimmed(true);
+				viewer.setDimmed(false);
 			}
 			viewer.draw();
 		}
@@ -385,10 +519,8 @@ class Inspector {
 	drawOverlay(id, ctx, k) {
 		const viewer = this.viewers[id];
 		if (!viewer) return;
+		const ik = 1/k;
 
-		const ik = 1/k; // Inverse zoom factor
-
-		// 1. Draw Cached Nodes as Pins
 		if (this.netNodeCache[id]) {
 			this.netNodeCache[id].forEach(n => {
 				let drawX = n.x;
@@ -396,69 +528,36 @@ class Inspector {
 
 				ctx.save();
 				ctx.translate(drawX, n.y);
-				ctx.scale(ik, ik); // Keep pin constant size on screen
-
-				// ROTATION: -45 degrees (Counter-Clockwise)
-				// This aligns the "Bottom-Left" corner of our square to point straight down if the square is in the Top-Right quadrant.
+				ctx.scale(ik, ik);
 				ctx.rotate(-Math.PI / 4);
 
-				// DRAW PIN SHAPE
-				// We draw a square relative to the origin (0,0).
-				// The Origin (0,0) is the Sharp Tip.
-				// The square extends into x>0, y<0 (Visual Top-Right relative to rotation axis)
-				// so that when rotated -45deg, it stands "Up" above the point.
-
-				const s = 20; // Size of the square side
-				const r = 10; // Radius (50% of size)
-
+				const s = 20, r = 10;
 				ctx.beginPath();
-				ctx.moveTo(0, 0); // Tip starts exactly on the node coordinate
-
-				// Left Edge (going 'Up' in local coords) -> Top-Left Corner
-				ctx.lineTo(0, -s + r);
-				ctx.arcTo(0, -s, s, -s, r);
-
-				// Top Edge -> Top-Right Corner
-				ctx.lineTo(s - r, -s);
-				ctx.arcTo(s, -s, s, 0, r);
-
-				// Right Edge -> Bottom-Right Corner
-				ctx.lineTo(s, -r);
-				ctx.arcTo(s, 0, 0, 0, r);
-
-				// Return to Tip
+				ctx.moveTo(0, 0);
+				ctx.lineTo(0, -s + r); ctx.arcTo(0, -s, s, -s, r);
+				ctx.lineTo(s - r, -s); ctx.arcTo(s, -s, s, 0, r);
+				ctx.lineTo(s, -r); ctx.arcTo(s, 0, 0, 0, r);
 				ctx.lineTo(0, 0);
 				ctx.closePath();
 
-				ctx.fillStyle = n.color; // Blue (#2563eb) or Green (#4ade80)
+				ctx.fillStyle = n.color;
 				ctx.fill();
-
-				// White Border
 				ctx.lineWidth = 1.5;
 				ctx.strokeStyle = 'white';
 				ctx.stroke();
 
-				// LABEL
-				// We want the text in the center of the "bulb".
-				// The center of our square is at (s/2, -s/2).
 				ctx.translate(s/2, -s/2);
-
-				// Rotate text back +45deg so it appears horizontal
 				ctx.rotate(Math.PI / 4);
-
 				ctx.fillStyle = 'white';
 				ctx.textAlign = 'center';
 				ctx.textBaseline = 'middle';
 				ctx.font = 'bold 9px sans-serif';
 				ctx.fillText(n.label, 0, 0);
-
 				ctx.restore();
 			});
 		}
 
-		// 2. Cursor Crosshair (Unchanged)
 		let cx, cy, color = '#ff0000';
-
 		if(this.cursorState && this.cursorState.masterId === id) {
 			cx = this.cursorState.mx; cy = this.cursorState.my;
 			if(viewer.isMirrored && viewer.bmp) cx = viewer.bmp.width - cx;
@@ -487,14 +586,10 @@ class Inspector {
 	async handleAddNode(imgId, x, y) {
 		const nextIdx = this.activeNet ? this.activeNet.nodes.length + 1 : 1;
 		const defaultLabel = `P${nextIdx}`;
-
 		const label = await requestInput("Add Node", "Pad/Pin Name", defaultLabel);
-
 		if(label) {
 			if(!this.activeNet) this.startNewNet();
-			this.activeNet.nodes.push({
-				id: uuid(), imgId: imgId, x: Math.round(x), y: Math.round(y), label: label
-			});
+			this.activeNet.nodes.push({ id: uuid(), imgId: imgId, x: Math.round(x), y: Math.round(y), label: label });
 			this.updateNetUI();
 			Object.values(this.viewers).forEach(v => v.draw());
 		}
@@ -502,16 +597,10 @@ class Inspector {
 
 	async saveNet() {
 		if(!this.activeNet) return;
-
-		// Only prompt for name if it's a new net
 		if (this.activeNet.isNew) {
 			const name = await requestInput("Save Net", "Net Name", this.activeNet.name);
-			if(name) {
-				this.activeNet.name = name;
-				delete this.activeNet.isNew;
-			} else {
-				return;
-			}
+			if(name) { this.activeNet.name = name; delete this.activeNet.isNew; }
+			else return;
 		}
 		this.activeNet.projectId = currentBomId;
 		await this.db.addNet(this.activeNet);
@@ -531,7 +620,6 @@ class Inspector {
 			this.activeNetEl.style.display = 'none';
 		} else {
 			this.activeNetEl.style.cssText = "pointer-events:auto; background:rgba(15, 23, 42, 0.9); padding:4px 10px; border-radius:20px; border:1px solid #334155; display:flex; color:white; align-items:center; gap:8px; box-shadow:0 4px 6px rgba(0,0,0,0.2); backdrop-filter:blur(4px); font-size:0.85rem; height:auto;";
-
 			this.activeNetEl.innerHTML = `
 				<span style="font-weight:600; color:#4ade80; max-width:100px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${this.activeNet.name}</span>
 				<span style="color:#94a3b8; border-left:1px solid #475569; padding-left:8px; font-size:0.8rem;">${this.activeNet.nodes.length}</span>
@@ -541,5 +629,4 @@ class Inspector {
 		}
 		this.updateNetNodeCache();
 	}
-
 }

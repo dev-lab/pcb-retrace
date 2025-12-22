@@ -57,7 +57,7 @@
 <div class="container">
 	<nav class="nav-header">
 		<a href="index.html" class="back-link">← Back to Home</a>
-		<span style="color:#94a3b8; font-size:0.9rem;">Documentation v5.3</span>
+		<span style="color:#94a3b8; font-size:0.9rem;">Documentation</span>
 	</nav>
 
 	<h1>PCB ReTrace Guide</h1>
@@ -138,6 +138,22 @@
 		<li><strong>KiCad Export (.net):</strong> Exports identified components and traced nets for use in PCB design software.</li>
 	</ul>
 
+	<h2>6. Sharing & Deep Links</h2>
+	<p>You can share a device setup by hosting the exported ZIP file on a public server and creating a "Deep Link" to it.</p>
+
+	<h3>URL Format</h3>
+	<p>Append `?import={URL}` to the studio address:</p>
+	<code>https://pcb.etaras.com/studio.html?import=https://example.com/my-device.zip</code>
+
+	<h3>Server Requirements (CORS)</h3>
+	<div class="warn-box">
+		<strong>Crucial:</strong> The server hosting the ZIP file must allow <strong>Cross-Origin Resource Sharing (CORS)</strong>.
+	</div>
+	<p>The browser will block the download if the server does not send the header <code>Access-Control-Allow-Origin: *</code>.</p>
+	<ul>
+		<li><strong>GitHub Pages:</strong> Supports CORS by default. Recommended for public sharing.</li>
+		<li><strong>AWS S3 / Google Cloud:</strong> Requires bucket configuration to allow GET requests from any origin.</li>
+	</ul>
 	<footer>
 		Copyright &copy; 2025 Taras Greben.
 	</footer>

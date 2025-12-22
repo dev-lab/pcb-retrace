@@ -150,6 +150,20 @@ async function init() {
 			// we could enable it, but usually updating inputs + clicking "Add/Update" is safer.
 		});
 	}
+
+	// Check for ?import={url} parameter
+	const urlParams = new URLSearchParams(window.location.search);
+	const importUrl = urlParams.get('import');
+
+	if (importUrl) {
+		// 1. Clean URL immediately so refresh doesn't trigger loop
+		const cleanLocation = window.location.protocol + "//" + window.location.host + window.location.pathname;
+		window.history.replaceState({ context: 'list' }, '', cleanLocation);
+
+		// 2. Trigger import (small delay to ensure DB/UI is ready)
+		setTimeout(() => processUrlImport(importUrl), 500);
+	}
+
 	setupDragDrop();
 	NavManager.init();
 }
@@ -2464,6 +2478,63 @@ function requestInput(title, label, val, opts = {}) {
 		inp.focus();
 		inp.select();
 	});
+}
+
+/* --- URL IMPORT LOGIC --- */
+
+async function importDeviceFromURL() {
+	// Use existing generic input modal
+	const url = await requestInput("Import Device", "ZIP URL", "https://");
+	if (url) {
+		await processUrlImport(url.trim());
+	}
+}
+
+async function processUrlImport(url) {
+	if (!url) return;
+
+	showBusy("Downloading Device...");
+
+	try {
+		const response = await fetch(url);
+
+		if (!response.ok) {
+			throw new Error(`HTTP Error ${response.status}: ${response.statusText}`);
+		}
+
+		const blob = await response.blob();
+
+		// 1. Determine Filename
+		// Clean query params (e.g. ?token=...) to check extension
+		const cleanUrl = url.split('?')[0].split('#')[0];
+		let filename = cleanUrl.substring(cleanUrl.lastIndexOf('/') + 1);
+
+		// 2. Fallback if filename is empty or doesn't look like a zip
+		// (importFile logic relies on .zip extension to detect mode)
+		if (!filename || !filename.toLowerCase().endsWith('.zip')) {
+			filename = "downloaded_device.zip";
+		}
+
+		// 3. Create Virtual File
+		// Note: 'new File' is supported in all modern browsers (Safari 10+, Chrome, FF)
+		const file = new File([blob], filename, { type: blob.type || 'application/zip' });
+
+		hideBusy();
+
+		// 4. Handover to existing Import logic
+		await importFile(file);
+
+	} catch (e) {
+		hideBusy();
+		console.error("URL Import Error:", e);
+
+		// User-friendly error regarding CORS
+		let msg = `Import Failed.\n\nError: ${e.message}`;
+		if (e.name === 'TypeError' && e.message === 'Failed to fetch') {
+			msg += `\n\nPossible Cause: CORS Restriction.\nThe server hosting this ZIP must send the header:\n"Access-Control-Allow-Origin: *"`;
+		}
+		alert(msg);
+	}
 }
 
 // Start
