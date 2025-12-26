@@ -88,11 +88,13 @@
 		<li>If identifying the value requires calculation, click the tool icon to open the built-in decoders (Resistor Bands, Inductors).</li>
 	</ul>
 
+
 	<h3>Step 3: Tracing Nets</h3>
 	<p>Use the <strong>Inspect</strong> and <strong>Nets</strong> tabs to document connectivity.</p>
 	<ul>
-		<li><strong>New Net:</strong> In the Inspect tab, click anywhere on the image to create a node. You will be prompted to name the Pin/Pad. If no net is currently active, entering a name will <strong>automatically start a new net</strong>.</li>
-		<li><strong>Add Nodes:</strong> Click on other pins that belong to the same electrical connection.</li>
+		<li><strong>Smart Naming:</strong> Click near a component to add a node. If the component is defined in the BOM, the tool <strong>auto-suggests the label</strong> (e.g., <code>R1.1</code>) using geometry (Angle & Distance). It automatically accounts for board rotation and flips pin logic for Bottom-side images.</li>
+		<li><strong>Pinout Help:</strong> Click the <button style="padding:0 5px; font-size:0.75rem; border-radius:50%; line-height:1;">?</button> button in the naming dialog to view standard conventions (e.g., "Stripe = Pin 1" for Tantalum).</li>
+		<li><strong>New Net:</strong> If no net is currently active, entering a name for a node will <strong>automatically start a new net</strong>.</li>
 		<li><strong>Export:</strong> In the Nets tab, you can export a <code>.net</code> file compatible with <strong>KiCad</strong> to help verify your reverse engineering in a professional EDA tool.</li>
 	</ul>
 
