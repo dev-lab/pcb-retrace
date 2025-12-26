@@ -13,6 +13,7 @@ class Inspector {
 		this.activeNet = null;
 		this.masterId = null;
 		this.netNodeCache = {}; // Cache for calculated node positions
+		this.bomCache = {}; // Cache for projected BOM coordinates
 
 		// Cache for image dimensions to avoid async bitmap creation on every render
 		this.resolutionCache = {};
@@ -47,6 +48,8 @@ class Inspector {
 	}
 
 	async _performInit() {
+		this.bomCache = {}; // Clear cache on re-init
+		this.backImagesCache = null; // Clear back-side cache
 		this.sidebarList.innerHTML = '';
 
 		const newNetBtn = document.querySelector('button[onclick="inspector.startNewNet()"]');
@@ -377,7 +380,8 @@ class Inspector {
 
 		if (hit) {
 			const res = await requestInput("Edit Node", "Node Name", hit.label, {
-				extraBtn: { label: 'Delete', value: '__DELETE__', class: 'danger' }
+				extraBtn: { label: 'Delete', value: '__DELETE__', class: 'danger' },
+				helpHtml: PIN_HELP_HTML
 			});
 			if (res === '__DELETE__') {
 				const idx = this.activeNet.nodes.indexOf(hit.origNode);
@@ -419,19 +423,26 @@ class Inspector {
 	async updateNetNodeCache() {
 		this.netNodeCache = {};
 		if (!this.activeNet || !this.activeNet.nodes) return;
+
+		// Initialize arrays for currently visible layers
 		for (const vid of this.visibleIds) this.netNodeCache[vid] = [];
 
 		for (const node of this.activeNet.nodes) {
-			if (this.visibleIds.has(node.imgId)) {
+			// 1. Direct Nodes (Source)
+			// Safety Check: Ensure the cache array exists before pushing
+			if (this.netNodeCache[node.imgId]) {
 				this.netNodeCache[node.imgId].push({
 					x: node.x, y: node.y, label: node.label,
 					color: '#2563eb', isSource: true, origNode: node
 				});
 			}
 
+			// 2. Inferred Nodes (Projected)
 			const paths = await ImageGraph.solvePaths(node.imgId, this.cv, this.db);
 			for (const p of paths) {
-				if (this.visibleIds.has(p.id)) {
+				// CHANGE: Check this.netNodeCache[p.id] instead of this.visibleIds.has(p.id)
+				// This prevents the crash if netNodeCache was reset by a concurrent call
+				if (this.netNodeCache[p.id]) {
 					const proj = this.cv.projectPoint(node.x, node.y, p.H);
 					if (proj) {
 						this.netNodeCache[p.id].push({
@@ -578,6 +589,322 @@ class Inspector {
 		}
 	}
 
+	// --- SMART NAMING LOGIC ---
+
+	async calculateGlobalRotation() {
+		// Default to 0 if data missing
+		if (typeof currentBomId === 'undefined' || typeof bomData === 'undefined') return 0;
+
+		const allNets = await this.db.getNets();
+		const projectNets = allNets.filter(n => n.projectId === currentBomId);
+
+		let totalAngle = 0;
+		let count = 0;
+
+		// We only trust 2-pin passive components for orientation
+		// (Resistors, Caps, Inductors, Diodes).
+		// ICs are complex, Transistors have triangles.
+		const SAFE_PREFIXES = ['R', 'C', 'L', 'D', 'VD'];
+
+		projectNets.forEach(net => {
+			net.nodes.forEach(node => {
+				// Find the component this node belongs to
+				// Node label format "R1.1" -> Ref "R1"
+				const parts = node.label.split('.');
+				if (parts.length !== 2) return;
+
+				const ref = parts[0];
+
+				// Check prefix
+				const prefix = ref.match(/^[A-Z]+/);
+				if (!prefix || !SAFE_PREFIXES.includes(prefix[0])) return;
+
+				const comp = bomData.find(c => c.label === ref);
+
+				// Critical: We must use coordinates from the SAME image to calculate angle
+				if (comp && comp.imgId === node.imgId && comp.x !== undefined) {
+					const dx = node.x - comp.x;
+					const dy = node.y - comp.y;
+
+					// Calculate raw angle in degrees
+					let deg = Math.atan2(dy, dx) * (180 / Math.PI);
+
+					// Normalize to deviation from nearest 90-degree axis (-45 to +45)
+					// Examples:
+					// 5 deg -> 5
+					// 85 deg -> -5 (relative to 90)
+					// 175 deg -> -5 (relative to 180)
+					while (deg <= -45) deg += 90;
+					while (deg > 45) deg -= 90;
+
+					// Filter outliers (e.g. diagonal placement)
+					// User requested up to 15 degrees, we allow 20 for safety
+					if (Math.abs(deg) < 20) {
+						totalAngle += deg;
+						count++;
+					}
+				}
+			});
+		});
+
+		if (count === 0) return 0;
+
+		// Return average rotation in Radians
+		const avgDeg = totalAngle / count;
+		return avgDeg * (Math.PI / 180);
+	}
+
+	async detectBackImages() {
+		if (this.backImagesCache) return this.backImagesCache;
+		if (typeof currentBomId === 'undefined' || typeof bomImages === 'undefined') return new Set();
+
+		const overlaps = await this.db._tx('overlappedImages', 'readonly', s => s.getAll());
+
+		// 1. Build Adjacency Graph (Partitioning)
+		const polarity = {}; // 1 vs -1
+		const adj = {};
+
+		overlaps.forEach(ov => {
+			if(!adj[ov.fromImageId]) adj[ov.fromImageId] = [];
+			if(!adj[ov.toImageId]) adj[ov.toImageId] = [];
+
+			// Determinant < 0 implies reflection (Flip)
+			const h = ov.homography;
+			const det = (h[0] * h[4]) - (h[1] * h[3]);
+			const isFlip = det < 0;
+
+			adj[ov.fromImageId].push({ target: ov.toImageId, isFlip });
+			adj[ov.toImageId].push({ target: ov.fromImageId, isFlip });
+		});
+
+		// BFS to propagate polarity
+		const visited = new Set();
+		const queue = [];
+
+		const startImg = bomImages[0];
+		if (!startImg) return new Set();
+
+		polarity[startImg.id] = 1;
+		queue.push(startImg.id);
+		visited.add(startImg.id);
+
+		while(queue.length > 0) {
+			const curr = queue.shift();
+			const curPol = polarity[curr];
+
+			if (adj[curr]) {
+				adj[curr].forEach(edge => {
+					if (!visited.has(edge.target)) {
+						visited.add(edge.target);
+						polarity[edge.target] = edge.isFlip ? -curPol : curPol;
+						queue.push(edge.target);
+					}
+				});
+			}
+		}
+
+		const groupA = new Set(Object.keys(polarity).filter(k => polarity[k] === 1));
+		const groupB = new Set(Object.keys(polarity).filter(k => polarity[k] === -1));
+
+		// 2. Heuristic 2: Check existing Resistor Nets (Reliable)
+		// Now checks both Pin 1 and Pin 2
+		const rot = await this.calculateGlobalRotation();
+		const cosR = Math.cos(-rot);
+		const sinR = Math.sin(-rot);
+
+		let scoreA = 0; // Positive = A is Top, Negative = A is Back
+
+		const allNets = await this.db.getNets();
+		const projectNets = allNets.filter(n => n.projectId === currentBomId);
+
+		for (const net of projectNets) {
+			for (const node of net.nodes) {
+				// Match R*.1 OR R*.2
+				const match = node.label.match(/^(R\d+)\.([12])$/);
+				if (!match) continue;
+
+				const ref = match[1];
+				const pinSuffix = match[2]; // '1' or '2'
+
+				const comp = bomData.find(c => c.label === ref);
+
+				// Ensure node and component are on the same image
+				if (comp && comp.imgId === node.imgId && comp.x !== undefined) {
+					const dx = node.x - comp.x;
+					const dy = node.y - comp.y;
+
+					// Rotate to align with horizontal axis
+					const rDx = dx * cosR - dy * sinR;
+
+					// Rule for TOP side:
+					// Pin 1 is Left (<0).
+					// Pin 2 is Right (>0).
+					const isTopBehavior = (pinSuffix === '1') ? (rDx < 0) : (rDx > 0);
+
+					if (groupA.has(node.imgId)) scoreA += (isTopBehavior ? 1 : -1);
+					else if (groupB.has(node.imgId)) scoreA += (isTopBehavior ? -1 : 1);
+				}
+			}
+		}
+
+		if (scoreA !== 0) {
+			this.backImagesCache = scoreA > 0 ? groupB : groupA;
+			return this.backImagesCache;
+		}
+
+		// 3. Heuristic 1: Count (Fallback)
+		if (groupB.size === 0) this.backImagesCache = new Set();
+		else if (groupA.size === 0) this.backImagesCache = groupA;
+		else this.backImagesCache = (groupA.size <= groupB.size) ? groupA : groupB;
+
+		return this.backImagesCache;
+	}
+
+	async getProjectedComponents(targetImgId) {
+		if (this.bomCache[targetImgId]) return this.bomCache[targetImgId];
+
+		const projected = [];
+
+		// 1. Calculate paths FROM the target TO everything else
+		// We want to answer: "Where is Image X relative to ME (Target)?"
+		// This runs Dijkstra once (One-to-Many) instead of Many-to-One
+		let pathMap = {};
+
+		if (typeof ImageGraph !== 'undefined') {
+			// solvePaths returns H for: Target -> Remote
+			const paths = await ImageGraph.solvePaths(targetImgId, this.cv, this.db);
+
+			paths.forEach(p => {
+				// To render a Remote component on Target, we need: Remote -> Target
+				// So we invert the matrix: inv(Target -> Remote)
+				const invH = ImageGraph.invertH(p.H);
+				if (invH) pathMap[p.id] = invH;
+			});
+		}
+
+		// 2. Iterate all components and project them
+		if (typeof bomData !== 'undefined') {
+			bomData.forEach(c => {
+				if (!c.imgId) return;
+
+				// Case A: Component is on the current image (Direct)
+				if (c.imgId === targetImgId) {
+					if (c.x !== undefined && c.y !== undefined) {
+						projected.push({ ...c, projX: c.x, projY: c.y });
+					}
+				}
+				// Case B: Component is on a connected image (Inferred)
+				else if (pathMap[c.imgId]) {
+					if (c.x !== undefined && c.y !== undefined) {
+						const H = pathMap[c.imgId];
+						const pt = this.cv.projectPoint(c.x, c.y, H);
+
+						// Basic sanity bounds to prevent projecting into infinity
+						// (can happen with near-singular matrices or extreme perspective)
+						if (pt && Math.abs(pt.x) < 50000 && Math.abs(pt.y) < 50000) {
+							projected.push({ ...c, projX: pt.x, projY: pt.y });
+						}
+					}
+				}
+			});
+		}
+
+		this.bomCache[targetImgId] = projected;
+		return projected;
+	}
+
+	async checkGlobalLabelUsage(label) {
+		// dependency: currentBomId is global from studio.js
+		if (!label || typeof currentBomId === 'undefined') return false;
+
+		// 1. Fetch ALL nets (Async)
+		// Optimization: In a huge app we'd index this, but filtering memory is fast enough for <10k nets
+		const allNets = await this.db.getNets();
+
+		// 2. Filter for current board
+		const projectNets = allNets.filter(n => n.projectId === currentBomId);
+
+		// 3. Scan for label collision
+		for (const net of projectNets) {
+			if (net.nodes && net.nodes.some(n => n.label === label)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	async getSuggestedLabel(imgId, x, y) {
+		const HIT_RADIUS = 150;
+
+		// 1. Get Data
+		const components = await this.getProjectedComponents(imgId);
+		const rotation = await this.calculateGlobalRotation();
+		const backImages = await this.detectBackImages();
+		const isBack = backImages.has(imgId);
+
+		const cosR = Math.cos(-rotation);
+		const sinR = Math.sin(-rotation);
+
+		let bestComp = null;
+		let minScore = Infinity;
+
+		// 2. Weighted Scoring Loop
+		components.forEach(c => {
+			const dx = x - c.projX;
+			const dy = y - c.projY;
+			const dist = Math.hypot(dx, dy);
+
+			if (dist < HIT_RADIUS) {
+				// Rotate vector
+				const rDx = dx * cosR - dy * sinR;
+				const rDy = dx * sinR + dy * cosR;
+
+				let angleDeg = Math.abs(Math.atan2(rDy, rDx) * (180 / Math.PI));
+				angleDeg = angleDeg % 90;
+				let deviation = Math.min(angleDeg, 90 - angleDeg);
+
+				const score = dist * (1 + (deviation * 0.1));
+
+				if (score < minScore) {
+					minScore = score;
+					bestComp = c;
+				}
+			}
+		});
+
+		if (!bestComp) return null;
+
+		// 3. Pin Logic
+		const bDx = x - bestComp.projX;
+		const bDy = y - bestComp.projY;
+
+		const rotDx = bDx * cosR - bDy * sinR;
+		const rotDy = bDx * sinR + bDy * cosR;
+
+		// Logic Branch:
+		// Top Side: Left/Top is 1 => (rotDx + rotDy) < 0
+		// Back Side: Right/Top is 1 => (rotDx - rotDy) > 0
+		let isPin1;
+		if (isBack) {
+			// Back: Favor Right (x>0) and Top (y<0).
+			// x - y => pos - neg = pos.
+			isPin1 = (rotDx - rotDy) > 0;
+		} else {
+			// Top: Favor Left (x<0) and Top (y<0).
+			// x + y => neg + neg = neg.
+			isPin1 = (rotDx + rotDy) < 0;
+		}
+
+		const primaryPin = isPin1 ? '1' : '2';
+		const secondaryPin = isPin1 ? '2' : '1';
+
+		const labelPrimary = `${bestComp.label}.${primaryPin}`;
+		const labelSecondary = `${bestComp.label}.${secondaryPin}`;
+
+		const primaryTaken = await this.checkGlobalLabelUsage(labelPrimary);
+		return primaryTaken ? labelSecondary : labelPrimary;
+	}
+
 	startNewNet() {
 		this.activeNet = { id: uuid(), name: "New Net", nodes: [], isNew: true };
 		this.updateNetUI();
@@ -585,8 +912,16 @@ class Inspector {
 
 	async handleAddNode(imgId, x, y) {
 		const nextIdx = this.activeNet ? this.activeNet.nodes.length + 1 : 1;
-		const defaultLabel = `P${nextIdx}`;
-		const label = await requestInput("Add Node", "Pad/Pin Name", defaultLabel);
+		let defaultLabel = `P${nextIdx}`;
+
+		// NEW: Async Smart Suggestion
+		const smartLabel = await this.getSuggestedLabel(imgId, x, y);
+		if (smartLabel) defaultLabel = smartLabel;
+
+		const label = await requestInput("Add Node", "Pad/Pin Name", defaultLabel, {
+			helpHtml: (typeof PIN_HELP_HTML !== 'undefined') ? PIN_HELP_HTML : null
+		});
+
 		if(label) {
 			if(!this.activeNet) this.startNewNet();
 			this.activeNet.nodes.push({ id: uuid(), imgId: imgId, x: Math.round(x), y: Math.round(y), label: label });

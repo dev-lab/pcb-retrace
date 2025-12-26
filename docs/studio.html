@@ -1070,15 +1070,21 @@
 <!-- GENERIC INPUT MODAL -->
 <div style="display:none; z-index:1150;" id="generic-input-modal" class="modal-overlay">
 	<div class="modal-content" style="height:auto; max-width:300px; background:#fff; border:1px solid #cbd5e1;">
-		<div class="modal-header">
-			<h3 style="margin:0" id="gim-title">Input</h3>
+		<div class="modal-header" style="display:flex; align-items:center; justify-content:space-between;">
+			<div style="display:flex; align-items:center; gap:10px;">
+				<h3 style="margin:0" id="gim-title">Input</h3>
+				<button id="gim-help-toggle" class="secondary sm-btn" style="display:none; padding:0 6px; font-size:0.75rem; height:20px; line-height:1;">?</button>
+			</div>
 			<button class="close-btn" onclick="document.getElementById('generic-input-modal').style.display='none'">×</button>
 		</div>
 		<div style="padding:1.5rem; display:flex; flex-direction:column; gap:1rem;">
 			<div>
 				<label id="gim-label" style="font-size:0.8rem; font-weight:700; color:#64748b; text-transform:uppercase; margin-bottom:0.2rem; display:block;">Value</label>
 				<input type="text" id="gim-input" style="width:100%; height:auto; padding:0.5rem; border:1px solid #cbd5e1; border-radius:0.3rem; font-size:1rem; box-sizing:border-box;">
+				<!-- NEW HELP CONTAINER -->
+				<div id="gim-help-content" style="display:none; margin-top:0.5rem; padding:0.5rem; background:#f0f9ff; border:1px solid #bae6fd; border-radius:4px; font-size:0.8rem; color:#0c4a6e;"></div>
 			</div>
+			<!-- (Footer remains the same) -->
 			<div style="display:flex; justify-content:space-between; gap:10px;" id="gim-footer">
 				<button id="gim-extra-btn" class="danger" style="display:none; padding:0.6rem 1rem; margin-right:auto;"></button>
 				<button id="gim-cancel-btn" class="secondary" style="padding:0.6rem 1rem;">Cancel</button>

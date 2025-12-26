@@ -79,7 +79,8 @@ async render() {
 		const node = net.nodes[nodeIdx];
 
 		const res = await requestInput("Edit Node", "Node Name", node.label, {
-			extraBtn: { label: 'Delete', value: '__DELETE__', class: 'danger' }
+			extraBtn: { label: 'Delete', value: '__DELETE__', class: 'danger' },
+			helpHtml: PIN_HELP_HTML
 		});
 
 		if (res === '__DELETE__') {
