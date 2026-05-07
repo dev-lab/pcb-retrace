@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Taras Greben
+ * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Commercial-pcb-retrace
+ * See LICENSE file for details.
+ */
+
 // ═══════════════════════════════════════════════════════════════
 //	LAYOUT — WireBender placement + routing
 //

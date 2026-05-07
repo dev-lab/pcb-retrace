@@ -1,3 +1,9 @@
+<!--
+  ~ Copyright (c) 2025-2026 Taras Greben
+  ~ SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Commercial-pcb-retrace
+  ~ See LICENSE file for details.
+-->
+
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" version="1">
  <path opacity=".2" d="m2 28.6v1c0 0.775 0.6248 1.4 1.4004 1.4h25.2c0.775 0 1.4-0.625 1.4-1.4v-1c0 0.775-0.625 1.4-1.4 1.4h-25.2c-0.7752 0-1.4-0.625-1.4-1.4z"/>
  <path style="fill:#44579d" d="M 3.4,2 C 2.6244,2 2,2.6244 2,3.4 V 28.6 C 2,29.3756 2.6244,30 3.4,30 H 28.6 C 29.3756,30 30,29.3756 30,28.6 V 9 A 7,7 0 0 0 23,2 Z"/>
