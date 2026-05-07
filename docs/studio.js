@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Taras Greben
+ * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Commercial-pcb-retrace
+ * See LICENSE file for details.
+ */
+
 /* studio.js - Main Application Logic */
 
 const ICONS = { RESISTOR: `<svg viewBox="0 0 24 24" fill="none"><rect x="4" y="6" width="16" height="12" rx="3" fill="#bae6fd" stroke="#0ea5e9" stroke-width="1"/><rect x="7" y="6" width="2" height="12" fill="#ef4444"/><rect x="11" y="6" width="2" height="12" fill="#000000"/><rect x="15" y="6" width="2" height="12" fill="#ef4444"/><line x1="1" y1="12" x2="4" y2="12" stroke="#94a3b8" stroke-width="2"/><line x1="20" y1="12" x2="23" y2="12" stroke="#94a3b8" stroke-width="2"/></svg>`, INDUCTOR: `<svg viewBox="0 0 24 24" fill="none"><rect x="4" y="5" width="16" height="14" rx="4" fill="#bbf7d0" stroke="#22c55e" stroke-width="1"/><rect x="7" y="5" width="2" height="14" fill="#cbd5e1"/><rect x="11" y="5" width="2" height="14" fill="#ef4444"/><rect x="15" y="5" width="2" height="14" fill="#ef4444"/><line x1="1" y1="12" x2="4" y2="12" stroke="#94a3b8" stroke-width="2"/><line x1="20" y1="12" x2="23" y2="12" stroke="#94a3b8" stroke-width="2"/></svg>`, COIL: `<svg viewBox="0 0 24 24" fill="none" stroke="#ea580c" stroke-width="2" stroke-linecap="round"><line x1="1" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="23" y2="12"/><path d="M5 12 C5 4 9 4 9 12"/><path d="M9 12 C9 19 10 19 10 12" stroke-opacity="0.5"/><path d="M10 12 C10 4 14 4 14 12"/><path d="M14 12 C14 19 15 19 15 12" stroke-opacity="0.5"/><path d="M15 12 C15 4 19 4 19 12"/></svg>` };

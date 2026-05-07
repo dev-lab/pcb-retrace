@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Taras Greben
+ * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Commercial-pcb-retrace
+ * See LICENSE file for details.
+ */
+
 // ── Undo history ─────────────────────────────────────────────
 // Kept separate to avoid circular imports between interaction.js and ui.js.
 import { S }				 from './state.js';
