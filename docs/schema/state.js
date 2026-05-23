@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2025-2026 Taras Greben
+ * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Commercial-pcb-retrace
+ * See LICENSE file for details.
+ */
+
 // ── State ─────────────────────────────────────────────────────
 // Single mutable app state object.	 All modules share this reference.
 export const S = {
