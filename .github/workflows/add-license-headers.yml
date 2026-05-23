@@ -20,7 +20,7 @@ jobs:
           config: .licenserc.yaml
 
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "chore: automatically enrich source files with copyright headers"
