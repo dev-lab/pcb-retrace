@@ -81,7 +81,7 @@ For commercial licensing inquiries, please contact: Taras Greben <taras.greben@g
 ## 📦 Third-Party Libraries
 
 * **OpenCV.js:** Computer Vision (Apache 2.0 License)
-* **JSZip:** File compression/decompression (MIT License)
+* **zip.js:** File compression/decompression (BSD 3-Clause License)
 * **WireBender:** Schematic generation/routing library (AGPLv3 or Commercial)
 * **Adaptagrams:** Used by WireBender via `libavoid`, `libcola`, and `libvpsc` (LGPL 2.1 or later)
 * **KiCad symbol libraries:** Redistributed symbol data bundled as `assets/kicad-symbols-master.zip`

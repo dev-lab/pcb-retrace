@@ -1,9 +1,3 @@
-/*
- * Copyright (c) 2025-2026 Taras Greben
- * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Commercial-pcb-retrace
- * See LICENSE file for details.
- */
-
 import { db, uuid } from './db.js';
 
 const SCALE = 20 / 2.54;
@@ -154,27 +148,66 @@ async function upsertParsedSymbols(parsedSymbols, libName) {
 
 // ── Public Importers ──────────────────────────────────────────────
 
-export async function importSelectedFromZip(zip, filenames) {
-	let stats = { inserted: 0, updated: 0 };
-	const filesByLib = {};
-	for (const filename of filenames) {
-		const match = filename.match(/([^\/]+)\.kicad_symdir\//);
-		const libName = match ? match[1] : 'Imported';
-		if (!filesByLib[libName]) filesByLib[libName] = [];
-		filesByLib[libName].push(filename);
-	}
+export async function importSelectedFromZip({ reader, entries }, filenames, onProgress) {
+	const notify = (msg) => { if (onProgress) onProgress(msg); };
+	const { TextWriter } = zip;
+	const entryMap = new Map(entries.map(e => [e.filename, e]));
+	const total = filenames.length;
 
-	for (const [libName, files] of Object.entries(filesByLib)) {
+	notify(`Decompressing 0/${total} files…`);
+
+	// Phase 1: decompression
+	let done = 0;
+	zip.configure({ /*useWebWorkers: false, */ useCompressionStream: true });
+	// console.time('[kicad] decompress');
+	const results = await Promise.all(
+		filenames.map(async filename => {
+			const entry = entryMap.get(filename);
+			if (!entry) return null;
+			const text = await entry.getData(new TextWriter());
+			notify(`Decompressing ${++done}/${total} files…`);
+			return { filename, text };
+		})
+	);
+	// console.timeEnd('[kicad] decompress');
+
+	// Phase 2: parsing
+	notify(`Parsing symbols…`);
+	// console.time('[kicad] parse');
+	const textsByLib = {};
+	for (const result of results) {
+		if (!result) continue;
+		const match = result.filename.match(/([^\/]+)\.kicad_symdir\//);
+		const libName = match ? match[1] : 'Imported';
+		if (!textsByLib[libName]) textsByLib[libName] = [];
+		textsByLib[libName].push(result.text);
+	}
+	const parsedByLib = {};
+	let totalSyms = 0;
+	for (const [libName, fileTexts] of Object.entries(textsByLib)) {
 		const parsedSymbols = {};
-		for (const filename of files) {
-			const text = await zip.files[filename].async("text");
-			extractTopLevelSymbols(parseSexpr(text), parsedSymbols);
-		}
+		for (const text of fileTexts) extractTopLevelSymbols(parseSexpr(text), parsedSymbols);
 		resolveInheritance(parsedSymbols);
+		parsedByLib[libName] = parsedSymbols;
+		totalSyms += Object.keys(parsedSymbols).length;
+	}
+	// console.timeEnd('[kicad] parse');
+
+	// Phase 3: DB writes
+	notify(`Writing ${totalSyms} symbols to database…`);
+	// console.time('[kicad] db-write');
+	let stats = { inserted: 0, updated: 0 };
+	const libs = Object.entries(parsedByLib);
+	for (let i = 0; i < libs.length; i++) {
+		const [libName, parsedSymbols] = libs[i];
+		notify(`Writing ${libName} (${i + 1}/${libs.length} libraries)…`);
 		const res = await upsertParsedSymbols(parsedSymbols, libName);
 		stats.inserted += res.inserted;
 		stats.updated += res.updated;
 	}
+	// console.timeEnd('[kicad] db-write');
+
+	await reader.close();
 	return stats;
 }
 
@@ -195,11 +228,27 @@ export async function autoImportDeviceLib() {
 		const res = await fetch(ZIP_URL);
 		if (!res.ok) throw new Error('Failed to fetch zip');
 
-		const buffer = await res.arrayBuffer();
-		const zip = await JSZip.loadAsync(buffer);
+		const { ZipReader, Uint8ArrayReader, TextWriter } = zip;
+		const buffer = new Uint8Array(await res.arrayBuffer());
+		const reader = new ZipReader(new Uint8ArrayReader(buffer), {
+			// useWebWorkers: false,
+			useCompressionStream: true
+		});
+		const entries = await reader.getEntries();
 
-		const deviceFiles = Object.keys(zip.files).filter(name => name.includes('/Device.kicad_symdir/') && name.endsWith('.kicad_sym'));
-		await importSelectedFromZip(zip, deviceFiles);
+		const parsedSymbols = {};
+		for (const entry of entries) {
+			if (!entry.directory
+				&& entry.filename.includes('/Device.kicad_symdir/')
+				&& entry.filename.endsWith('.kicad_sym')) {
+				const text = await entry.getData(new TextWriter());
+				extractTopLevelSymbols(parseSexpr(text), parsedSymbols);
+			}
+		}
+
+		await reader.close();
+		resolveInheritance(parsedSymbols);
+		await upsertParsedSymbols(parsedSymbols, 'Device');
 		console.log('[kicad] Default library import complete!');
 	} catch (err) {
 		console.error('[kicad] Auto-import failed:', err);

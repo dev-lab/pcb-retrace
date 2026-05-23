@@ -1,9 +1,3 @@
-/*
- * Copyright (c) 2025-2026 Taras Greben
- * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Commercial-pcb-retrace
- * See LICENSE file for details.
- */
-
 // ── UI helpers ────────────────────────────────────────────────
 import { db, uuid } from './db.js';
 import { S, getNetColor }			  from './state.js';
@@ -492,7 +486,13 @@ function initLibraryManager() {
 	let libsData = {};
 
 	const log = (msg) => { logEl.innerHTML += `<div>${msg}</div>`; logEl.scrollTop = logEl.scrollHeight; };
-	const resetZipUi = () => { defaultUi.style.display = 'flex'; zipUi.style.display = 'none'; currentZip = null; libsData = {}; };
+	const resetZipUi = () => {
+		if (currentZip?.reader) currentZip.reader.close().catch(() => {});
+		currentZip = null;
+		libsData = {};
+		defaultUi.style.display = 'flex';
+		zipUi.style.display = 'none';
+	};
 
 	if (btnOpen) btnOpen.onclick = () => { modal.classList.add('active'); resetZipUi(); };
 
@@ -504,16 +504,25 @@ function initLibraryManager() {
 
 	async function processZipBuffer(buffer) {
 		log('Parsing ZIP directory structure...');
-		currentZip = await JSZip.loadAsync(buffer);
-		const files = Object.keys(currentZip.files).filter(n => n.endsWith('.kicad_sym'));
+		const { ZipReader, Uint8ArrayReader } = zip;
+		const reader = new ZipReader(new Uint8ArrayReader(new Uint8Array(buffer)), {
+			// useWebWorkers: false,
+			useCompressionStream: true
+		});
+		const entries = await reader.getEntries();
+
+		// Keep reader open — needed later when user clicks Import
+		currentZip = { reader, entries };
 
 		libsData = {};
-		files.forEach(f => {
-			const match = f.match(/([^\/]+)\.kicad_symdir\//);
-			const libName = match ? match[1] : 'Imported';
-			if (!libsData[libName]) libsData[libName] = new Array();
-			libsData[libName].push({ path: f, name: f.split('/').pop().replace('.kicad_sym','') });
-		});
+		entries
+			.filter(e => !e.directory && e.filename.endsWith('.kicad_sym'))
+			.forEach(e => {
+				const match = e.filename.match(/([^\/]+)\.kicad_symdir\//);
+				const libName = match ? match[1] : 'Imported';
+				if (!libsData[libName]) libsData[libName] = [];
+				libsData[libName].push({ path: e.filename, name: e.filename.split('/').pop().replace('.kicad_sym', '') });
+			});
 
 		treeEl.innerHTML = '';
 		Object.keys(libsData).sort().forEach(libName => {
@@ -597,13 +606,28 @@ function initLibraryManager() {
 
 		if (selectedPaths.length === 0) return toast('No files selected', 'warn');
 
-		// Capture the zip reference BEFORE resetting the UI state!
+		// Detach without closing — importSelectedFromZip owns the reader now and will close it
 		const zipRef = currentZip;
-		resetZipUi();
+		currentZip = null;
+		libsData = {};
+		defaultUi.style.display = 'flex';
+		zipUi.style.display = 'none';
 
 		log(`Extracting and parsing ${selectedPaths.length} files...`);
 		try {
-			const stats = await importSelectedFromZip(zipRef, selectedPaths);
+			const stats = await importSelectedFromZip(zipRef, selectedPaths, (msg) => {
+				// Update last line if it looks like a progress message, otherwise append
+				const last = logEl.lastElementChild;
+				if (last && last.dataset.progress) {
+					last.textContent = msg;
+				} else {
+					const div = document.createElement('div');
+					div.dataset.progress = '1';
+					div.textContent = msg;
+					logEl.appendChild(div);
+				}
+				logEl.scrollTop = logEl.scrollHeight;
+			});
 			log(`Success: <span style="color:#4ade80">${stats.inserted} inserted</span>, <span style="color:#f0c040">${stats.updated} updated</span>.`);
 			toast('Import Complete', 'ok');
 		} catch (err) { log(`<span style="color:var(--accent3)">Error: ${err.message}</span>`); }
