@@ -436,7 +436,7 @@ wbDescriptorTransformed() {
 		const geo = this.geometry();
 		const s = this._s;
 		const hw = geo.w / 2 + 8, hh = geo.h / 2 + 8;
-		const rot = -(s.rotation || 0) * Math.Pi / 180;
+		const rot = -(s.rotation || 0) * Math.PI / 180;
 		const dx = wx - s.x, dy = wy - s.y;
 		const lx = dx * Math.cos(rot) - dy * Math.sin(rot);
 		const ly = dx * Math.sin(rot) + dy * Math.cos(rot);
