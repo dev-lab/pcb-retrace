@@ -2487,7 +2487,7 @@ async function autoStitchNewImage(newId) {
 	} finally {
 		hideBusy();
 		// Refresh overlaps if we successfully matched anything
-		if (await db.getOverlapsForImage(newId).length > 0) {
+		if ((await db.getOverlapsForImage(newId)).length > 0) {
 			await updateOverlapCache();
 			renderPins();
 		}
