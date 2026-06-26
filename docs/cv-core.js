@@ -105,7 +105,9 @@ class CVManager {
 		const { mat, scale, width, height } = await this.createSmallMat(blob);
 		const kp = new cv.KeyPointVector();
 		const des = new cv.Mat();
-		this.detector.detectAndCompute(mat, new cv.Mat(), kp, des);
+		const mask = new cv.Mat();
+		this.detector.detectAndCompute(mat, mask, kp, des);
+		mask.delete();
 		mat.delete();
 		return { kp, des, scale, w: width, h: height };
 	}
