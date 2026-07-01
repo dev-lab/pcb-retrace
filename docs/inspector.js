@@ -24,6 +24,16 @@ class Inspector {
 		// Cache for image dimensions to avoid async bitmap creation on every render
 		this.resolutionCache = {};
 
+		// --- PCB trace rendering (WireBender PcbVisualizer) ---
+		// The cache lives on the instance so generated traces survive navigation
+		// between tabs/views and are not recalculated unnecessarily.
+		this.traceCache = new TraceCache();
+		this.traceRenderer = new TraceRenderer(this.traceCache);
+		this.traceRenderCache = {}; // imgId → projected draw list
+		this.traceRefId = null; // reference image id for the routed coordinate space
+		this.showInactiveTraces = true; // UI toggle for inactive net traces
+		this._forceTraceRecalc = false; // one-shot full recalculation flag
+
 		// Initialization State Lock
 		this.initPromise = null;
 		this.needsSync = false;
@@ -57,6 +67,14 @@ class Inspector {
 		this.bomCache = {}; // Clear cache on re-init
 		this.backImagesCache = null; // Clear back-side cache
 		this.sidebarList.innerHTML = '';
+
+		// Synchronize Inactive Traces state with restored checkbox values
+		const cb = document.getElementById('inspect-inactive-cb');
+		const cbDropdown = document.getElementById('inspect-inactive-in-dropdown-cb');
+		if (cb) {
+			this.showInactiveTraces = cb.checked;
+			if (cbDropdown) cbDropdown.checked = cb.checked;
+		}
 
 		const newNetBtn = document.querySelector('button[onclick="inspector.startNewNet()"]');
 		if(newNetBtn) newNetBtn.style.display = 'none';
@@ -256,7 +274,7 @@ class Inspector {
 
 			const lbl = document.createElement('div');
 			lbl.innerText = imgRec.name;
-			lbl.style.cssText = "position:absolute; top:5px; left:5px; background:rgba(0,0,0,0.7); padding:2px 6px; font-size:0.7rem; pointer-events:none; border-radius:3px; color:white;";
+			lbl.style.cssText = "position:absolute; top:5px; right:5px; background:rgba(0,0,0,0.7); padding:2px 6px; font-size:0.7rem; pointer-events:none; border-radius:3px; color:white;";
 			cell.appendChild(lbl);
 
 			this.grid.appendChild(cell);
@@ -323,6 +341,7 @@ class Inspector {
 			cvs.addEventListener('pointerup', () => {
 				if(this.needsSync) {
 					this.updateNetNodeCache();
+					this.updateTraceRenderCache();
 					this.needsSync = false;
 				}
 			});
@@ -370,6 +389,7 @@ class Inspector {
 			} catch(e) { console.error("Inspector img load error", e); }
 		}
 		this.updateNetNodeCache();
+		this.updateTraceRenderCache();
 		if (this.masterId) this.syncCursors(this.masterId, null, null, true);
 	}
 
@@ -464,6 +484,115 @@ class Inspector {
 		Object.values(this.viewers).forEach(v => v.draw());
 	}
 
+	/**
+	 * Recompute the per-image trace draw lists from the (cached) routed traces.
+	 *
+	 * Traces are routed only once per change set via the PcbVisualizer WASM API
+	 * and stored in this.traceCache (reference-image space). Here we merely reuse
+	 * the existing perspective transform to project them onto each visible view —
+	 * no per-view recalculation of routing occurs.
+	 * @param forceAll force a full re-route of every net (cache invalidation)
+	 */
+	async updateTraceRenderCache(forceAll = false) {
+		this.traceRenderCache = {};
+		if (typeof currentBomId === 'undefined' || !currentBomId) return;
+		if (typeof ImageGraph === 'undefined') return;
+
+		const refId = this._traceReferenceId();
+		if (!refId) return;
+		this.traceRefId = refId;
+
+		const nets = await this._collectNets();
+
+		// One Dijkstra solve gives both directions (via inverse) for every image.
+		const refPaths = await ImageGraph.solvePaths(refId, this.cv, this.db);
+		const fwd = {}; // refId → id
+		const inv = {}; // id → refId
+		refPaths.forEach(p => {
+			fwd[p.id] = p.H;
+			const iH = ImageGraph.invertH(p.H);
+			if (iH) inv[p.id] = iH;
+		});
+
+		const projectNodeToRef = (node) => {
+			if (node.imgId === refId) return { x: node.x, y: node.y };
+			const H = inv[node.imgId];
+			if (!H) return null;
+			return this.cv.projectPoint(node.x, node.y, H);
+		};
+
+		try {
+			await this.traceCache.ensure(nets, refId, projectNodeToRef, forceAll || this._forceTraceRecalc);
+		} catch (e) {
+			console.error('[Inspector] trace routing failed', e);
+		}
+		this._forceTraceRecalc = false;
+
+		const activeId = this.activeNet ? this.activeNet.id : null;
+		for (const id of this.visibleIds) {
+			let projectPointFn;
+			if (id === refId) {
+				projectPointFn = (pt) => pt;
+			} else {
+				const H = fwd[id];
+				if (!H) { this.traceRenderCache[id] = []; continue; }
+				projectPointFn = (pt) => this.cv.projectPoint(pt.x, pt.y, H);
+			}
+			this.traceRenderCache[id] = this.traceRenderer.buildDrawList(
+				nets, activeId, this.showInactiveTraces, projectPointFn);
+		}
+
+		Object.values(this.viewers).forEach(v => v.draw());
+	}
+
+	/**
+	 * Collect the nets of the current board, substituting the live (possibly
+	 * unsaved) active net so the Inspect view never shows stale geometry.
+	 * @returns Promise<Array> net records
+	 */
+	async _collectNets() {
+		const all = await this.db.getNets();
+		let nets = all.filter(n => n.projectId === currentBomId);
+		if (this.activeNet) {
+			nets = nets.filter(n => n.id !== this.activeNet.id);
+			nets.push(this.activeNet);
+		}
+		return nets;
+	}
+
+	/**
+	 * Pick a stable reference image (top-most) for the routed coordinate space.
+	 * @returns string|null image id
+	 */
+	_traceReferenceId() {
+		if (typeof bomImages === 'undefined' || !bomImages.length) return null;
+		const sorted = [...bomImages].sort((a, b) => {
+			const nA = a.name.toLowerCase(), nB = b.name.toLowerCase();
+			if (nA.includes('top')) return -1;
+			if (nB.includes('top')) return 1;
+			return nA.localeCompare(nB);
+		});
+		return sorted[0].id;
+	}
+
+	/**
+	 * UI handler: toggle visibility of inactive net traces.
+	 * @param show whether inactive traces should be visible
+	 */
+	toggleInactiveTraces(show) {
+		this.showInactiveTraces = !!show;
+		this.updateTraceRenderCache();
+	}
+
+	/**
+	 * UI handler: invalidate the cache and re-route every net of the active
+	 * board with the PcbVisualizer WASM API.
+	 */
+	async recalcAllTraces() {
+		this.traceCache.invalidateAll();
+		await this.updateTraceRenderCache(true);
+	}
+
 	async syncCursors(masterId, mx, my, forceRefresh = false) {
 		if (mx !== null && my !== null) {
 			this.cursorState = { masterId, mx, my };
@@ -539,6 +668,12 @@ class Inspector {
 		const viewer = this.viewers[id];
 		if (!viewer) return;
 		const ik = 1/k;
+
+		// Render generated PCB traces beneath the node labels.
+		if (this.traceRenderer && this.traceRenderCache[id]) {
+			const mirrorWidth = (viewer.isMirrored && viewer.bmp) ? viewer.bmp.width : 0;
+			this.traceRenderer.draw(ctx, this.traceRenderCache[id], k, mirrorWidth);
+		}
 
 		if (this.netNodeCache[id]) {
 			this.netNodeCache[id].forEach(n => {
@@ -973,5 +1108,6 @@ class Inspector {
 			`;
 		}
 		this.updateNetNodeCache();
+		this.updateTraceRenderCache();
 	}
 }

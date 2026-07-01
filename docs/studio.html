@@ -28,6 +28,7 @@
 	<script src="studio.js" defer></script>
 	<script src="canvas-ui.js"></script>
 	<script src="nets.js"></script>
+	<script src="inspect-traces.js"></script>
 	<script src="inspector.js"></script>
 
 	<link rel="stylesheet" href="common.css">
@@ -392,6 +393,63 @@
 		#inspect-grid {
 			flex: 1;
 			min-height: 0; /* Critical for nested flex scrolling/sizing */
+		}
+
+		/* ── Inspect Toolbar ── */
+
+		/* Layers pill — shared base */
+		#inspect-layers-details summary {
+			cursor: pointer;
+			color: #334155;
+			font-weight: 700;
+			font-size: 0.8rem;
+			outline: none;
+			list-style: none;
+			white-space: nowrap;
+			user-select: none;
+		}
+		/* Kill the browser disclosure marker — shows as "9" on some mobile engines */
+		#inspect-layers-details summary::marker,
+		#inspect-layers-details summary::-webkit-details-marker {
+			display: none;
+			content: '';
+		}
+
+		#inspect-recalc-btn .label-text {
+			margin-left: 0.25rem;
+		}
+
+		/* ── Responsive: wide screens ── */
+		/* On wide screens: hide Inactive Traces from inside the dropdown (shown as toolbar pill instead) */
+		@media (min-width: 561px) {
+			#inspect-inactive-in-dropdown {
+				display: none !important;
+			}
+		}
+
+		/* ── Responsive: narrow / mobile ── */
+		@media (max-width: 560px) {
+
+			/* 1. Hide "Layers" text, keep only ☰ */
+			#inspect-layers-details .layers-label {
+				display: none;
+			}
+
+			/* 2. Hide the toolbar pill — Inactive Traces lives only in the dropdown on mobile */
+			#inspect-inactive-traces-toggle {
+				display: none !important;
+			}
+
+			/* 3. Recalc Traces: icon only */
+			#inspect-recalc-btn .label-text {
+				display: none;
+			}
+
+			/* Tighten the recalc button to a compact square */
+			#inspect-recalc-btn {
+				padding: 0 0.5rem !important;
+				min-width: 2rem;
+			}
 		}
 
 		/* Add to common.css or styles */
@@ -878,17 +936,34 @@
 			<!-- 1. Layers Dropdown -->
 			<div style="pointer-events:auto; padding:0 0.5rem; background:rgba(255,255,255,0.95); box-shadow:0 2px 10px rgba(0,0,0,0.3); border-radius:4px; height:2rem; display:flex; align-items:center;">
 				<details id="inspect-layers-details" style="position:relative;">
-					<summary style="cursor:pointer; color:#334155; font-weight:700; font-size:0.8rem; outline:none; white-space:nowrap; list-style:none;">☰ Layers ▾</summary>
-					<div id="inspect-layers" style="position:absolute; top:100%; left:-0.5rem; margin-top:0.5rem; background:white; padding:10px; border-radius:4px; box-shadow:0 4px 12px rgba(0,0,0,0.2); display:flex; flex-direction:column; gap:5px; min-width:200px;"></div>
+					<summary>☰<span class="layers-label"> Layers</span> <span style="display:inline-block;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid #334155;vertical-align:middle;margin-left:2px;"></span></summary>
+					<div style="position:absolute; top:100%; left:-0.5rem; margin-top:0.5rem; background:white; padding:10px; border-radius:4px; box-shadow:0 4px 12px rgba(0,0,0,0.2); display:flex; flex-direction:column; gap:5px; min-width:200px;">
+						<!-- Inactive Traces toggle — always first in the dropdown list -->
+						<div id="inspect-inactive-in-dropdown" style="display:grid; grid-template-columns:20px 1fr; align-items:center; gap:5px; color:#1e40af; font-size:0.85rem; border-bottom:1px solid #bfdbfe; padding-bottom:4px; margin-bottom:2px; cursor:pointer; background:#eff6ff; border-radius:3px; padding:4px 4px 4px 4px;" title="Show traces of inactive nets" onclick="this.querySelector('input').click()">
+							<input type="checkbox" id="inspect-inactive-in-dropdown-cb" checked onchange="inspector.toggleInactiveTraces(this.checked); document.getElementById('inspect-inactive-cb').checked = this.checked; event.stopPropagation();" style="cursor:pointer;" onclick="event.stopPropagation();">
+							<span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Inactive Traces</span>
+						</div>
+						<!-- Layer images injected by JS into #inspect-layers below -->
+						<div id="inspect-layers" style="display:flex; flex-direction:column; gap:5px;"></div>
+					</div>
 				</details>
 			</div>
 
-			<!-- 2. Active Net Info (Hidden by default) -->
+			<!-- 2. Inactive Traces toggle — shown on wide screens, hidden on mobile -->
+			<label id="inspect-inactive-traces-toggle" style="pointer-events:auto; display:flex; align-items:center; gap:5px; padding:0 0.6rem; height:2rem; background:rgba(255,255,255,0.95); box-shadow:0 2px 10px rgba(0,0,0,0.3); border-radius:4px; color:#334155; font-size:0.8rem; font-weight:700; white-space:nowrap; cursor:pointer;" title="Show traces of inactive nets">
+				<input type="checkbox" id="inspect-inactive-cb" checked onchange="inspector.toggleInactiveTraces(this.checked); document.getElementById('inspect-inactive-in-dropdown-cb').checked = this.checked;" style="cursor:pointer;">
+				<span class="label-text">Inactive Traces</span>
+			</label>
+
+			<!-- 3. Recalc Traces button (uses SVG to avoid ↻ font-fallback) -->
+			<button id="inspect-recalc-btn" class="secondary sm-btn" style="pointer-events:auto; box-shadow:0 2px 5px rgba(0,0,0,0.5); height:2rem; background:rgba(255,255,255,0.95);" onclick="inspector.recalcAllTraces()" title="Re-route all nets"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg><span class="label-text">Re-route</span></button>
+
+			<!-- 4. Active Net Info (Hidden by default) -->
 			<div id="inspect-active-net" style="pointer-events:auto; background:rgba(30, 41, 59, 0.95); padding:0 0.8rem; border-radius:4px; border:1px solid #475569; display:none; color:white; height:2rem; align-items:center; box-shadow:0 2px 5px rgba(0,0,0,0.5);">
 				<!-- Injected by JS -->
 			</div>
 
-			<!-- 3. New Net Button -->
+			<!-- 5. New Net Button -->
 			<button class="primary sm-btn" style="pointer-events:auto; box-shadow:0 2px 5px rgba(0,0,0,0.5); height:2rem;" onclick="inspector.startNewNet()">+ New Net</button>
 		</div>
 

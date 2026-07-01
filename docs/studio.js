@@ -2944,6 +2944,12 @@ function requestInput(title, label, val, opts = {}) {
 		document.getElementById('gim-label').innerText = label;
 		inp.value = val || '';
 
+		// --- Remove any validation listener left over from a previous call ---
+		if (inp._validateHandler) {
+			inp.removeEventListener('input', inp._validateHandler);
+			inp._validateHandler = null;
+		}
+
 		// --- Handle Help Text ---
 		helpContent.style.display = 'none'; // Reset to hidden
 		if (opts.helpHtml) {
@@ -2962,7 +2968,7 @@ function requestInput(title, label, val, opts = {}) {
 		let resultToResolve = null;
 		let isInputValid = true; // Updated by opts.validate; always true when no validator is set
 
-		// 1. Cleanup & Resolve
+		   // 1. Cleanup & Resolve
 		const close = () => {
 			window.removeEventListener('popstate', onPopState);
 			modal.style.display = 'none';
@@ -3001,8 +3007,7 @@ function requestInput(title, label, val, opts = {}) {
 				close();
 			}
 		};
-
-		// 4. Setup DOM
+		  // 4. Setup DOM
 		const newOk = document.getElementById('gim-ok-btn').cloneNode(true);
 		const newCancel = document.getElementById('gim-cancel-btn').cloneNode(true);
 		const newExtra = extraBtn.cloneNode(true);
@@ -3040,7 +3045,7 @@ function requestInput(title, label, val, opts = {}) {
 		// etc.).  requestInput only wires up the plumbing and gates OK on isValid.
 		if (opts.validate) {
 			const validateArgs = opts.validateArgs ? opts.validateArgs : [];
-			inp.addEventListener('input', async () => {
+			const handler = async () => {
 				const result = await opts.validate(inp.value, ...validateArgs);
 
 				// Apply sanitized value if the validator changed it
@@ -3056,7 +3061,9 @@ function requestInput(title, label, val, opts = {}) {
 				helpToggle.style.display = 'block';
 				helpContent.style.display = 'block';
 				helpContent.innerHTML = result.feedbackHtml + (opts.helpHtml || '');
-			});
+			};
+			inp._validateHandler = handler;
+			inp.addEventListener('input', handler);
 			// Trigger once on open so the field is validated immediately
 			setTimeout(() => inp.dispatchEvent(new Event('input')), 50);
 		}
