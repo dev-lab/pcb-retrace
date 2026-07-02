@@ -31,8 +31,12 @@ const TraceConfig = {
 	INACTIVE_TRACE_COLOR: '#7dd3fc', // light sky cyan
 	/** Wire stroke width (screen pixels, scale-compensated). */
 	TRACE_WIDTH: 2.5,
-	/** Junction dot radius (screen pixels, scale-compensated). */
-	JUNCTION_RADIUS: 4,
+	/** Junction rounding radius (screen pixels, scale-compensated). */
+	JUNCTION_RADIUS: 10,
+	/** Outer radius of a pin's copper pad (screen pixels, scale-compensated). */
+	PAD_OUTER_RADIUS: 4,
+	/** Radius of the drill hole punched out of the centre of each pad. */
+	PAD_HOLE_RADIUS: 2.5,
 	/**
 	 * Global recalculation policy when any single net changes:
 	 *	 'single' — recompute only the modified net (default, fastest).
@@ -77,7 +81,7 @@ class TraceCache {
 	 *	 module		  — pre-resolved WireBender Module (overridable for tests).
 	 */
 	constructor(opts = {}) {
-		/** netId → { sig, name, wires:[[{x,y}]], junctions:[{x,y}] } (reference space). */
+		/** netId → { sig, name, wires:[[{x,y}]], junctions:[{x,y}], pads:[{x,y}] } (reference space). */
 		this.entries = new Map();
 		/** Reference image id the cached geometry belongs to. */
 		this.refId = null;
@@ -172,11 +176,12 @@ class TraceCache {
 		});
 
 		// Nets with < 2 pads cannot be routed — store empty geometry but record
-		// the current signature so they are not retried every refresh.
+		// the current signature so they are not retried every refresh. Pad
+		// positions are kept regardless, so a lone pin can still be rendered.
 		prepared.forEach(({ net, pads }) => {
 			if (pads.length < 2) {
 				this.entries.set(net.id, {
-					sig: NetSignature.of(net), name: net.name, wires: [], junctions: [],
+					sig: NetSignature.of(net), name: net.name, wires: [], junctions: [], pads,
 				});
 			}
 		});
@@ -218,11 +223,11 @@ class TraceCache {
 				byKey[key].junctions.push({ x: d.position.x, y: d.position.y });
 			}
 
-			routable.forEach(({ net }) => {
+			routable.forEach(({ net, pads }) => {
 				const data = byKey[net.id] || { wires: [], junctions: [] };
 				this.entries.set(net.id, {
 					sig: NetSignature.of(net), name: net.name,
-					wires: data.wires, junctions: data.junctions,
+					wires: data.wires, junctions: data.junctions, pads,
 				});
 			});
 			this.stats.netsRouted += routable.length;
@@ -244,6 +249,7 @@ class TraceRenderer {
 	 */
 	constructor(cache) {
 		this.cache = cache;
+		this.tempCanvas = null; // Cached offscreen canvas to prevent frame-rate drops
 	}
 
 	/**
@@ -253,7 +259,7 @@ class TraceRenderer {
 	 * @param activeNetId id of the active net (labels + active colour)
 	 * @param showInactive whether inactive net traces are visible
 	 * @param projectPointFn (pt {x,y}) => {x,y}|null — ref space → image space
-	 * @returns array of { netId, isActive, color, polylines:[[{x,y}]], junctions:[{x,y}] }
+	 * @returns array of { netId, isActive, color, polylines:[[{x,y}]], junctions:[{x,y}], pads:[{x,y}] }
 	 */
 	buildDrawList(nets, activeNetId, showInactive, projectPointFn) {
 		const list = [];
@@ -281,7 +287,13 @@ class TraceRenderer {
 				if (q) junctions.push(q);
 			}
 
-			list.push({ netId: net.id, isActive, color, polylines, junctions });
+			const pads = [];
+			for (const p of (entry.pads || [])) {
+				const q = projectPointFn(p);
+				if (q) pads.push(q);
+			}
+
+			list.push({ netId: net.id, isActive, color, polylines, junctions, pads });
 		}
 
 		// Active net is drawn last so it sits on top of inactive traces.
@@ -294,6 +306,11 @@ class TraceRenderer {
 	 * the viewer (image space). Mirroring is applied per-point to match the
 	 * node-label rendering in inspector.js.
 	 *
+	 * Rendering order per net mimics real copper: traces first, a small
+	 * fillet at each junction to blend separate wire segments together, then
+	 * pin pads (ring with a drilled hole) on top so connected pins read as
+	 * through-hole pads rather than bare wire ends.
+	 *
 	 * @param ctx 2D canvas context (translated/scaled by the viewer)
 	 * @param drawList output of buildDrawList()
 	 * @param k current viewer scale
@@ -304,29 +321,302 @@ class TraceRenderer {
 		const ik = 1 / k;
 		const mx = x => (mirrorWidth ? mirrorWidth - x : x);
 
-		for (const item of drawList) {
-			ctx.strokeStyle = item.color;
-			ctx.lineWidth = TraceConfig.TRACE_WIDTH * ik;
-			ctx.lineJoin = 'round';
-			ctx.lineCap = 'round';
+		// Helper to calculate the shortest distance from point p to segment ab
+		const distanceToSegment = (p, a, b) => {
+			const dx = b.x - a.x;
+			const dy = b.y - a.y;
+			const l2 = dx * dx + dy * dy;
+			if (l2 === 0) {
+				return { dist: Math.hypot(p.x - a.x, p.y - a.y), t: 0 };
+			}
+			let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2;
+			t = Math.max(0, Math.min(1, t));
+			const projX = a.x + t * dx;
+			const projY = a.y + t * dy;
+			return {
+				dist: Math.hypot(p.x - projX, p.y - projY),
+				t: t
+			};
+		};
 
+		// Helper to walk along trace segments and determine the exact physical room for the fillet.
+		// Stops instantly if we hit a pad or a sharp turn (>= 45 degrees).
+		const getSmartPointAlongPolyline = (pl, startIndex, direction, targetDist, padCoords) => {
+			let accumulatedDist = 0;
+			let currIdx = startIndex;
+			let prevDir = null;
+			let remainingDist = targetDist;
+			let currentPt = pl[startIndex];
+
+			while (true) {
+				const nextIdx = currIdx + direction;
+				if (nextIdx < 0 || nextIdx >= pl.length || remainingDist <= 0) {
+					return { pt: currentPt, actualDist: accumulatedDist };
+				}
+
+				const p1 = pl[currIdx];
+				const p2 = pl[nextIdx];
+				const dx = p2.x - p1.x;
+				const dy = p2.y - p1.y;
+				const len = Math.hypot(dx, dy);
+
+				if (len === 0) {
+					currIdx = nextIdx;
+					continue;
+				}
+
+				const unitDir = { x: dx / len, y: dy / len };
+
+				if (prevDir !== null) {
+					const dot = prevDir.x * unitDir.x + prevDir.y * unitDir.y;
+					// Sharp turn of 45 degrees or more (dot < 0.707): stop immediately at the vertex
+					if (dot < 0.707) {
+						return { pt: p1, actualDist: accumulatedDist };
+					}
+				}
+
+				// Check if the next vertex p2 is close to a pad
+				const nearPad = padCoords.some(pad => Math.hypot(p2.x - pad.x, p2.y - pad.y) < 2.0);
+
+				if (len >= remainingDist) {
+					const targetPt = {
+						x: p1.x + unitDir.x * remainingDist,
+						y: p1.y + unitDir.y * remainingDist
+					};
+					return { pt: targetPt, actualDist: accumulatedDist + remainingDist };
+				}
+
+				accumulatedDist += len;
+				remainingDist -= len;
+				prevDir = unitDir;
+				currentPt = p2;
+
+				if (nearPad) {
+					return { pt: p2, actualDist: accumulatedDist };
+				}
+
+				currIdx = nextIdx;
+			}
+		};
+
+		// Allocate or resize the offscreen canvas to match the main viewport
+		if (!this.tempCanvas) {
+			this.tempCanvas = document.createElement('canvas');
+		}
+		if (this.tempCanvas.width !== ctx.canvas.width || this.tempCanvas.height !== ctx.canvas.height) {
+			this.tempCanvas.width = ctx.canvas.width;
+			this.tempCanvas.height = ctx.canvas.height;
+		}
+
+		const tempCtx = this.tempCanvas.getContext('2d');
+		tempCtx.clearRect(0, 0, this.tempCanvas.width, this.tempCanvas.height);
+		tempCtx.globalCompositeOperation = 'source-over';
+
+		// Copy transform from main canvas to draw in the correct space
+		tempCtx.save();
+		tempCtx.setTransform(ctx.getTransform());
+
+		for (const item of drawList) {
+			tempCtx.strokeStyle = item.color;
+			tempCtx.fillStyle = item.color;
+			tempCtx.lineWidth = TraceConfig.TRACE_WIDTH * ik;
+			tempCtx.lineJoin = 'round';
+			tempCtx.lineCap = 'round';
+
+			// 1. Draw Wires
 			for (const pl of item.polylines) {
-				ctx.beginPath();
+				if (pl.length < 2) continue;
+
+				tempCtx.beginPath();
 				pl.forEach((p, i) => {
 					const x = mx(p.x);
-					if (i === 0) ctx.moveTo(x, p.y);
-					else ctx.lineTo(x, p.y);
+					if (i === 0) tempCtx.moveTo(x, p.y);
+					else tempCtx.lineTo(x, p.y);
 				});
-				ctx.stroke();
+				tempCtx.stroke();
 			}
 
-			ctx.fillStyle = item.color;
+			// 2. Draw Junctions (filleted smooth corners)
+			const rJunc = TraceConfig.JUNCTION_RADIUS * ik;
+
 			for (const j of item.junctions) {
-				ctx.beginPath();
-				ctx.arc(mx(j.x), j.y, TraceConfig.JUNCTION_RADIUS * ik, 0, Math.PI * 2);
-				ctx.fill();
+				const branches = [];
+
+				for (const pl of item.polylines) {
+					if (pl.length < 2) continue;
+
+					// Find the single closest vertex of this polyline to the junction
+					let minVertDist = Infinity;
+					let closestVertIdx = -1;
+					for (let i = 0; i < pl.length; i++) {
+						const dist = Math.hypot(pl[i].x - j.x, pl[i].y - j.y);
+						if (dist < minVertDist) {
+							minVertDist = dist;
+							closestVertIdx = i;
+						}
+					}
+
+					// Find the single closest segment of this polyline to the junction
+					let minSegDist = Infinity;
+					let closestSegIdx = -1;
+					for (let i = 0; i < pl.length - 1; i++) {
+						const res = distanceToSegment(j, pl[i], pl[i + 1]);
+						if (res.dist < minSegDist) {
+							minSegDist = res.dist;
+							closestSegIdx = i;
+						}
+					}
+
+					// Target fillet size (fully matches JUNCTION_RADIUS)
+					const targetWalkDist = rJunc;
+
+					if (minVertDist < 1.5) {
+						const idx = closestVertIdx;
+						if (idx > 0) {
+							const res = getSmartPointAlongPolyline(pl, idx, -1, targetWalkDist, item.pads);
+							const dx = res.pt.x - j.x;
+							const dy = res.pt.y - j.y;
+							const len = Math.hypot(dx, dy);
+							if (len > 0) {
+								branches.push({
+									dir: { x: dx / len, y: dy / len },
+									maxLen: len
+								});
+							}
+						}
+						if (idx < pl.length - 1) {
+							const res = getSmartPointAlongPolyline(pl, idx, 1, targetWalkDist, item.pads);
+							const dx = res.pt.x - j.x;
+							const dy = res.pt.y - j.y;
+							const len = Math.hypot(dx, dy);
+							if (len > 0) {
+								branches.push({
+									dir: { x: dx / len, y: dy / len },
+									maxLen: len
+								});
+							}
+						}
+					} else if (minSegDist < 2.0) {
+						const a = pl[closestSegIdx];
+						const b = pl[closestSegIdx + 1];
+
+						// Branch towards a (backward)
+						const lenA = Math.hypot(a.x - j.x, a.y - j.y);
+						if (lenA > 0) {
+							const targetA = Math.max(0, targetWalkDist - lenA);
+							const resA = getSmartPointAlongPolyline(pl, closestSegIdx, -1, targetA, item.pads);
+							const dx = resA.pt.x - j.x;
+							const dy = resA.pt.y - j.y;
+							const len = Math.hypot(dx, dy);
+							if (len > 0) {
+								branches.push({
+									dir: { x: dx / len, y: dy / len },
+									maxLen: len
+								});
+							}
+						}
+
+						// Branch towards b (forward)
+						const lenB = Math.hypot(b.x - j.x, b.y - j.y);
+						if (lenB > 0) {
+							const targetB = Math.max(0, targetWalkDist - lenB);
+							const resB = getSmartPointAlongPolyline(pl, closestSegIdx + 1, 1, targetB, item.pads);
+							const dx = resB.pt.x - j.x;
+							const dy = resB.pt.y - j.y;
+							const len = Math.hypot(dx, dy);
+							if (len > 0) {
+								branches.push({
+									dir: { x: dx / len, y: dy / len },
+									maxLen: len
+								});
+							}
+						}
+					}
+				}
+
+				// Deduplicate branch directions pointing the same way (within ~5.7 degrees)
+				const uniqueBranches = [];
+				for (const b of branches) {
+					const angle = Math.atan2(b.dir.y, b.dir.x);
+					let duplicate = false;
+					for (const ub of uniqueBranches) {
+						let diff = Math.abs(angle - ub.angle);
+						if (diff > Math.PI) diff = 2 * Math.PI - diff;
+						if (diff < 0.1) {
+							duplicate = true;
+							ub.maxLen = Math.min(ub.maxLen, b.maxLen);
+							break;
+						}
+					}
+					if (!duplicate) {
+						uniqueBranches.push({
+							dir: b.dir,
+							angle: angle,
+							maxLen: b.maxLen
+						});
+					}
+				}
+
+				if (uniqueBranches.length >= 2) {
+					uniqueBranches.sort((a, b) => a.angle - b.angle);
+
+					for (let i = 0; i < uniqueBranches.length; i++) {
+						const b1 = uniqueBranches[i];
+						const b2 = uniqueBranches[(i + 1) % uniqueBranches.length];
+
+						// Avoid drawing flat fillets on straight runs (180 degrees)
+						const dot = b1.dir.x * b2.dir.x + b1.dir.y * b2.dir.y;
+						if (dot < -0.99) continue;
+
+						// Use the physical distances calculated by the path walker directly
+						const r1 = b1.maxLen;
+						const r2 = b2.maxLen;
+
+						const p1 = { x: j.x + b1.dir.x * r1, y: j.y + b1.dir.y * r1 };
+						const p2 = { x: j.x + b2.dir.x * r2, y: j.y + b2.dir.y * r2 };
+
+						tempCtx.beginPath();
+						tempCtx.moveTo(mx(j.x), j.y);
+						tempCtx.lineTo(mx(p1.x), p1.y);
+						tempCtx.quadraticCurveTo(mx(j.x), j.y, mx(p2.x), p2.y);
+						tempCtx.closePath();
+						tempCtx.fill();
+					}
+				} else {
+					// Fallback to solid circular dot if we cannot resolve multiple branch directions
+					tempCtx.beginPath();
+					tempCtx.arc(mx(j.x), j.y, rJunc, 0, Math.PI * 2);
+					tempCtx.fill();
+				}
+			}
+
+			// 3. Draw Solid Pads
+			for (const p of item.pads) {
+				const cx = mx(p.x), cy = p.y;
+				tempCtx.beginPath();
+				tempCtx.arc(cx, cy, TraceConfig.PAD_OUTER_RADIUS * ik, 0, Math.PI * 2);
+				tempCtx.fill();
 			}
 		}
+
+		// 4. Cleanly "drill" the holes through copper layer using transparent compositing
+		tempCtx.globalCompositeOperation = 'destination-out';
+		for (const item of drawList) {
+			for (const p of item.pads) {
+				const cx = mx(p.x), cy = p.y;
+				tempCtx.beginPath();
+				tempCtx.arc(cx, cy, TraceConfig.PAD_HOLE_RADIUS * ik, 0, Math.PI * 2);
+				tempCtx.fill();
+			}
+		}
+
+		tempCtx.restore();
+
+		// Overlay the final rendered offscreen layers onto the main canvas
+		ctx.save();
+		ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform for direct 1:1 pixel copy
+		ctx.drawImage(this.tempCanvas, 0, 0);
+		ctx.restore();
 	}
 }
 
