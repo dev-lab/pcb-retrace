@@ -406,6 +406,14 @@ export function initUI(mode, importNetlistStandalone, resetLayout, hasLayoutData
 		};
 	}
 
+	document.getElementById('btn-reroute').onclick = async () => {
+		if (!S.hasData) { toast('No netlist', 'warn'); return; }
+		pushHistory();
+		const l = await import('./layout.js');
+		await l.buildAndRoute({}, false);
+		toast('Re-routed schematic diagram');
+	};
+
 	document.getElementById('btn-auto-place').onclick = async () => {
 		if (!S.hasData) { toast('No netlist', 'warn'); return; }
 		if (hasLayoutData && hasLayoutData()) {
