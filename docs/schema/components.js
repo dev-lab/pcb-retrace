@@ -598,8 +598,15 @@ export class ZenerComp extends _DiodeBase {
 export class ICComp extends CompBase {
 	static prefixes = [];				// catch-all — matched when no other class claims the prefix
 	static typeKey = 'IC';
-	get color() { return '#a78bfa'; }
-	get label() { return 'IC'; }
+
+	constructor(state) {
+		super(state);
+		const Cls = _byType.get(state.type);
+		this._delegate = (Cls && Cls !== ICComp && Cls !== KiCadComp) ? new Cls(state) : null;
+	}
+
+	get color() { return this._delegate ? this._delegate.color : '#a78bfa'; }
+	get label() { return this._delegate ? this._delegate.label : 'IC'; }
 
 	_buildGeometry() {
 		const cp = this._s.pins;
@@ -847,6 +854,9 @@ const _byPrefix = ALL_TYPES
  */
 export function createComp(state) {
 	const Cls = _byType.get(state.type) ?? ICComp;
+	if (Cls !== ICComp && Cls !== KiCadComp && state.pins && state.pins.length > 2) {
+		return new ICComp(state);
+	}
 	return new Cls(state);
 }
 
