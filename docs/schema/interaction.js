@@ -527,6 +527,45 @@ export function initInteraction(saveComponentLayout, saveViewport) {
 		if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 		_hideContextMenu();
 
+		if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+			const isUp = e.key === 'ArrowUp';
+			const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+			if (S.selectedComp) {
+				e.preventDefault();
+				const idx = S.components.findIndex(c => c.id === S.selectedComp);
+				if (idx !== -1) {
+					const nextIdx = isUp ? idx - 1 : idx + 1;
+					if (nextIdx >= 0 && nextIdx < S.components.length) {
+						const nextComp = S.components[nextIdx];
+						S.selectedComp = nextComp.id;
+						showProperties(nextComp);
+						updateSidePanels();
+						render();
+						document.querySelector('.comp-item.selected')?.scrollIntoView({ block: 'nearest' });
+					}
+				}
+				return;
+			}
+
+			if (S.selectedNet) {
+				e.preventDefault();
+				const idx = S.nets.findIndex(n => n.name === S.selectedNet);
+				if (idx !== -1) {
+					const nextIdx = isUp ? idx - 1 : idx + 1;
+					if (nextIdx >= 0 && nextIdx < S.nets.length) {
+						const nextNet = S.nets[nextIdx];
+						S.selectedNet = nextNet.name;
+						showNetProperties(nextNet);
+						updateSidePanels();
+						render();
+						document.querySelector('.net-item.selected')?.scrollIntoView({ block: 'nearest' });
+					}
+				}
+				return;
+			}
+		}
+
 		if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
 			undo(); return;
 		}

@@ -302,6 +302,11 @@ async function _ingestParsed(parsed, studioComps = [], boardId = null) {
 		isWip: (n.nodes || []).length <= 1,
 	}));
 
+	// Sort globally once per ingestion using natural (BOM) collation order
+	const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+	S.components.sort((a, b) => naturalCollator.compare(a.ref, b.ref));
+	S.nets.sort((a, b) => naturalCollator.compare(a.name, b.name));
+
 	S.hasData = true;
 	S.selectedComp = null;
 	S.selectedNet = null;
