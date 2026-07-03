@@ -42,3 +42,5 @@ bom.json
 tmp/
 temp/
 *.log
+
+release.sh
