@@ -318,6 +318,17 @@ export async function buildAndRoute(lockedPlacements = {}, runPlacement = true) 
 
 	// Classify (bus detection)
 	const cls = _wb.classify();
+	for(let i = 0; i < cls.size(); ++i) {
+		const item = cls.get(i);
+		if(item.isBus) {
+			console.info("Resetting bus:", item.name, "isGround:", item.isGround, "isPositive:", item.isPositive, "busLevel:", item.busLevel);
+			item.isBus = false;
+			item.isGround = false;
+			item.isPositive = false;
+			item.busLevel = -1;
+			cls.set(i, item);
+		}
+	}
 	_wb.applyClassification(cls);
 	cls.delete();
 
