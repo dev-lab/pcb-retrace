@@ -1407,7 +1407,6 @@ function confirmAction(message, btnText = "Confirm") {
 		const okBtn = document.getElementById('confirm-btn-ok');
 		const cancelBtn = document.getElementById('confirm-btn-cancel');
 		const closeBtn = modal.querySelector('.close-btn');
-		const modalContext = 'confirmation-modal';
 
 		msgEl.innerText = message;
 		okBtn.innerText = btnText;
@@ -1416,24 +1415,24 @@ function confirmAction(message, btnText = "Confirm") {
 
 		// 1. Cleanup & Resolve
 		const close = () => {
-			window.removeEventListener('popstate', onPopState);
+			window.removeEventListener('keydown', onKeyDown, true);
 			modal.style.display = 'none';
 			resolve(resultToResolve);
 		};
 
-		// 2. Handle History Changes (Back Button / Escape)
-		const onPopState = () => {
-			close();
+		// 2. Escape Key Listener (Capturing phase to intercept before NavManager)
+		const onKeyDown = (e) => {
+			if (e.key === 'Escape') {
+				e.preventDefault();
+				e.stopPropagation();
+				commit(false);
+			}
 		};
 
 		// 3. Handle UI Actions (OK / Cancel)
 		const commit = (res) => {
 			resultToResolve = res;
-			if (history.state && history.state.context === modalContext) {
-				history.back(); // This triggers onPopState -> close()
-			} else {
-				close();
-			}
+			close();
 		};
 
 		// 4. Setup DOM (Clone to cleanly remove old listeners)
@@ -1446,12 +1445,8 @@ function confirmAction(message, btnText = "Confirm") {
 		newCancel.onclick = (e) => { e.stopPropagation(); commit(false); };
 		closeBtn.onclick = (e) => { e.stopPropagation(); e.preventDefault(); commit(false); };
 
-		// 5. Open & Push State
-		if (!history.state || history.state.context !== modalContext) {
-			history.pushState({ context: modalContext }, "", "");
-		}
-
-		window.addEventListener('popstate', onPopState);
+		// 5. Setup Listeners and Display
+		window.addEventListener('keydown', onKeyDown, true);
 		modal.style.display = 'flex';
 		newCancel.focus(); // Default focus on Cancel
 	});
@@ -2634,12 +2629,8 @@ const NavManager = {
 		if (typeof iframe !== 'undefined') { iframe.style.display = 'none'; iframe.src = 'about:blank'; }
 
 		// 2. Restore View
-		if (ctx === 'map') {
-			switchView('map', true); // Pass true to skip pushState
-		} else if (ctx === 'nets') {
-			switchView('nets', true);
-		} else if (ctx === 'inspect') {
-			switchView('inspect', true);
+		if (ctx && document.getElementById('view-' + ctx)) {
+			switchView(ctx, true);
 		} else {
 			// Default to List
 			switchView('list', true);
