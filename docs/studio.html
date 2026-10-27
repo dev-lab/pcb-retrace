@@ -1083,6 +1083,9 @@
 
 			<!-- Camera UI Overlay -->
 			<div id="camera-overlay" style="display:none; position:absolute; inset:0; pointer-events:none;">
+				<button id="btn-switch-cam" style="display:none; pointer-events:auto; position:absolute; top:20px; left:20px; background:rgba(0,0,0,0.5); border:1px solid white; color:white; border-radius:50%; width:40px; height:40px; padding:0; cursor:pointer;" onclick="ImageImporter.switchCamera()" title="Switch Camera">
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block; margin:auto;"><path d="M20 11a8.1 8.1 0 0 0-15.5-2m-.5-4v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4"/></svg>
+				</button>
 				<button id="btn-flash" style="display:none; pointer-events:auto; position:absolute; top:20px; right:20px; background:rgba(0,0,0,0.5); border:1px solid white; color:white; border-radius:50%; width:40px; height:40px; font-size:18px;" onclick="ImageImporter.toggleFlash()" title="Toggle Flash">⚡</button>
 				<div style="position:absolute; bottom:20px; left:0; right:0; text-align:center; pointer-events:auto;">
 					<button class="primary" style="border-radius:50%; width:60px; height:60px; font-size:24px; box-shadow:0 0 10px rgba(0,0,0,0.5); border:3px solid white;" onclick="ImageImporter.captureVideo()" title="Take Photo">◉</button>
@@ -1321,6 +1324,11 @@ const ImageImporter = {
 	flashBtn: document.getElementById('btn-flash'),
 	retakeBtn: document.getElementById('btn-retake'),
 	cropBtn: document.getElementById('btn-crop-toggle'),
+	switchCamBtn: document.getElementById('btn-switch-cam'),
+
+	currentFacingMode: 'environment',
+	videoDevices: [],
+	currentDeviceIndex: 0,
 
 	stream: null,
 	track: null,
@@ -1397,34 +1405,164 @@ const ImageImporter = {
 
 	openCamera: async function() {
 		this.isCameraSession = true;
+		this.currentFacingMode = 'environment';
+		this.videoDevices = [];
+		this.currentDeviceIndex = 0;
 		this.openModal('camera');
+
 		const overlay = document.getElementById('camera-overlay');
 		const msg = document.getElementById('camera-msg');
 		msg.style.display = 'block'; msg.innerHTML = "Requesting Camera Access...";
-		overlay.style.display = 'none'; this.flashBtn.style.display = 'none';
+		overlay.style.display = 'none';
+		if (this.flashBtn) this.flashBtn.style.display = 'none';
+		if (this.switchCamBtn) this.switchCamBtn.style.display = 'none';
 
 		if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
 			msg.innerHTML = "Camera API not supported.<br>(HTTPS required)"; return;
 		}
 
-		try {
-			this.stream = await navigator.mediaDevices.getUserMedia({
-				video: { facingMode: { ideal: 'environment' }, width: { ideal: 4096 }, height: { ideal: 2160 }, focusMode: { ideal: 'continuous' } },
+		await this.startCameraStream();
+	},
+
+	startCameraStream: async function() {
+		const overlay = document.getElementById('camera-overlay');
+		const msg = document.getElementById('camera-msg');
+
+		this.stopStream();
+
+		const baseConstraints = {
+			width: { ideal: 4096 },
+			height: { ideal: 2160 }
+		};
+
+		const supConstraints = (navigator.mediaDevices.getSupportedConstraints && navigator.mediaDevices.getSupportedConstraints()) || {};
+		if (supConstraints.focusMode) {
+			baseConstraints.focusMode = { ideal: 'continuous' };
+		}
+
+		let stream = null;
+
+		// 1. If a specific device has been selected, try exact deviceId
+		const targetDevice = (this.videoDevices.length > 0 && this.videoDevices[this.currentDeviceIndex])
+			? this.videoDevices[this.currentDeviceIndex]
+			: null;
+
+		if (targetDevice && targetDevice.deviceId) {
+			try {
+				stream = await navigator.mediaDevices.getUserMedia({
+					video: { ...baseConstraints, deviceId: { exact: targetDevice.deviceId } },
+					audio: false
+				});
+			} catch (e) {
+				console.warn("Could not start with exact deviceId, falling back", e);
+			}
+		}
+
+		// 2. Try exact facingMode ('environment' by default on open)
+		// This forces Firefox on newer Android devices to pick the rear camera
+		if (!stream && this.currentFacingMode) {
+			try {
+				stream = await navigator.mediaDevices.getUserMedia({
+					video: { ...baseConstraints, facingMode: { exact: this.currentFacingMode } },
+					audio: false
+				});
+			} catch (e) {
+				console.warn("Exact facingMode not satisfied, trying ideal", e);
+			}
+		}
+
+		// 3. Fallback to ideal facingMode
+		if (!stream && this.currentFacingMode) {
+			try {
+				stream = await navigator.mediaDevices.getUserMedia({
+					video: { ...baseConstraints, facingMode: { ideal: this.currentFacingMode } },
+					audio: false
+				});
+			} catch (e) {
+				console.warn("Ideal facingMode failed, falling back to default", e);
+			}
+		}
+
+		// 4. Ultimate fallback (e.g. desktop webcam with no facingMode)
+		if (!stream) {
+			stream = await navigator.mediaDevices.getUserMedia({
+				video: baseConstraints,
 				audio: false
 			});
-			this.video.srcObject = this.stream;
-			this.video.onloadedmetadata = () => {
-				msg.style.display = 'none'; overlay.style.display = 'block';
-				this.track = this.stream.getVideoTracks()[0];
-				const caps = this.track.getCapabilities ? this.track.getCapabilities() : {};
-				const supConstraints = navigator.mediaDevices.getSupportedConstraints();
-				if (('torch' in caps) || supConstraints.torch) {
-					this.flashBtn.style.display = 'block';
-					this.flashBtn.style.background = 'rgba(0,0,0,0.5)';
-					this.flashBtn.dataset.on = "false";
+		}
+
+		this.stream = stream;
+		this.video.srcObject = this.stream;
+		this.video.onloadedmetadata = async () => {
+			msg.style.display = 'none';
+			overlay.style.display = 'block';
+			this.track = this.stream.getVideoTracks()[0];
+
+			const caps = this.track.getCapabilities ? this.track.getCapabilities() : {};
+			if (('torch' in caps) || supConstraints.torch) {
+				this.flashBtn.style.display = 'block';
+				this.flashBtn.style.background = 'rgba(0,0,0,0.5)';
+				this.flashBtn.dataset.on = "false";
+			} else {
+				this.flashBtn.style.display = 'none';
+			}
+
+			await this.updateVideoDevices();
+		};
+	},
+
+	updateVideoDevices: async function() {
+		try {
+			if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+			const devices = await navigator.mediaDevices.enumerateDevices();
+			this.videoDevices = devices.filter(d => d.kind === 'videoinput');
+
+			// Sync currentDeviceIndex with active track
+			const currentTrack = this.stream ? this.stream.getVideoTracks()[0] : null;
+			const settings = currentTrack && currentTrack.getSettings ? currentTrack.getSettings() : {};
+			if (settings.deviceId && this.videoDevices.length > 0) {
+				const idx = this.videoDevices.findIndex(d => d.deviceId === settings.deviceId);
+				if (idx !== -1) this.currentDeviceIndex = idx;
+			}
+			if (settings.facingMode) {
+				this.currentFacingMode = settings.facingMode;
+			}
+
+			// Show switch button on mobile/touch devices or whenever multiple cameras exist
+			const isMobile = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+			if (this.switchCamBtn) {
+				this.switchCamBtn.style.display = (this.videoDevices.length > 1 || isMobile) ? 'inline-flex' : 'none';
+			}
+		} catch (e) {
+			console.warn("enumerateDevices failed", e);
+		}
+	},
+
+	switchCamera: async function() {
+		if (this.videoDevices.length > 1) {
+			this.currentDeviceIndex = (this.currentDeviceIndex + 1) % this.videoDevices.length;
+			const dev = this.videoDevices[this.currentDeviceIndex];
+			if (dev && dev.label) {
+				const lbl = dev.label.toLowerCase();
+				if (lbl.includes('front') || lbl.includes('user')) {
+					this.currentFacingMode = 'user';
+				} else if (lbl.includes('back') || lbl.includes('rear') || lbl.includes('environment')) {
+					this.currentFacingMode = 'environment';
+				} else {
+					this.currentFacingMode = (this.currentFacingMode === 'environment') ? 'user' : 'environment';
 				}
-			};
-		} catch (err) { console.error(err); msg.innerHTML = "Error accessing camera:<br>" + err.message; }
+			}
+		} else {
+			this.currentFacingMode = (this.currentFacingMode === 'environment') ? 'user' : 'environment';
+		}
+
+		try {
+			await this.startCameraStream();
+		} catch (err) {
+			console.error("Failed to switch camera:", err);
+			const msg = document.getElementById('camera-msg');
+			if (msg) msg.innerHTML = "Error switching camera:<br>" + err.message;
+		}
 	},
 
 	toggleFlash: function() {
@@ -1477,6 +1615,10 @@ const ImageImporter = {
 		if (this.stream) {
 			this.stream.getTracks().forEach(t => { try { t.applyConstraints({ advanced: [{ torch: false }] }); } catch(e){} t.stop(); });
 			this.stream = null; this.track = null;
+		}
+		if (this.flashBtn) {
+			this.flashBtn.dataset.on = "false";
+			this.flashBtn.style.background = 'rgba(0,0,0,0.5)';
 		}
 	},
 
