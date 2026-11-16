@@ -382,10 +382,6 @@ class Inspector {
 				const bmp = await createImageBitmap(imgRec.blob);
 				viewer.setImage(bmp);
 				updateView();
-
-				if(imgRec.name.toLowerCase().includes('bot') && !imgRec.name.toLowerCase().includes('top')) {
-					viewer.setMirror(true);
-				}
 			} catch(e) { console.error("Inspector img load error", e); }
 		}
 		this.updateNetNodeCache();
