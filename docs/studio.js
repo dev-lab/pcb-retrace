@@ -483,10 +483,12 @@ async function addPart() {
 	if (returnToMap) { switchView('map'); returnToMap = false; }
 	else {
 		// Optional: blink the button or give feedback
-		const btn = document.querySelector('.btn-add');
-		const origText = btn.innerText;
-		btn.innerText = "Saved!";
-		setTimeout(() => btn.innerText = origText, 1000);
+		const btn = document.querySelector('#add-form .btn-save-icon.primary');
+		if (btn) {
+			const origText = btn.innerText;
+			btn.innerText = "✓";
+			setTimeout(() => btn.innerText = origText, 1000);
+		}
 	}
 }
 

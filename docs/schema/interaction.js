@@ -164,6 +164,15 @@ function d4delta(current, target) {
 	return d4compose(target, d4inverse(current));
 }
 
+async function _saveThenRoute(id) {
+	if (_saveComponentLayout) {
+		try { await _saveComponentLayout(id); }
+		catch (e) { console.error('[schema] save failed', e); }
+	}
+	try { await moveComponentRoute(id); }
+	catch (e) { console.error('[schema] moveComponentRoute failed', e); }
+}
+
 function _rotateComp(comp, delta) {
 	pushHistory();
 	const prev = { rotation: comp.rotation || 0, flipX: comp.flipX || false };
@@ -173,9 +182,7 @@ function _rotateComp(comp, delta) {
 	comp.flipX = next.flipX;
 	showProperties(comp);
 	updateSidePanels();
-	moveComponentRoute(comp.id).then(() => {
-		if (_saveComponentLayout) _saveComponentLayout(comp.id);
-	});
+	_saveThenRoute(comp.id);
 }
 
 // ── Touch long-press for context menu ─────────────────────────
@@ -286,9 +293,7 @@ export function initInteraction(saveComponentLayout, saveViewport) {
 		if (S.dragging) {
 			const movedId = S.dragging.compId;
 			S.dragging = null;
-			moveComponentRoute(movedId).then(() => {
-				if (_saveComponentLayout) _saveComponentLayout(movedId);
-			});
+			_saveThenRoute(movedId);
 			return;
 		}
 		if (S.panning) {
@@ -304,9 +309,7 @@ export function initInteraction(saveComponentLayout, saveViewport) {
 		if (S.dragging) {
 			const movedId = S.dragging.compId;
 			S.dragging = null;
-			moveComponentRoute(movedId).then(() => {
-				if (_saveComponentLayout) _saveComponentLayout(movedId);
-			});
+			_saveThenRoute(movedId);
 		}
 		if (S.panning) {
 			S.panning = false; S.panStart = null;
@@ -466,9 +469,7 @@ export function initInteraction(saveComponentLayout, saveViewport) {
 				// Drag finished
 				if (_touchDragType === 'comp' && S.dragging) {
 					const movedId = S.dragging.compId;
-					moveComponentRoute(movedId).then(() => {
-						if (_saveComponentLayout) _saveComponentLayout(movedId);
-					});
+					_saveThenRoute(movedId);
 				} else if ((_touchDragType === 'pan' || _touchDragType === 'zoom') && _saveViewport) {
 					_saveViewport();
 				}

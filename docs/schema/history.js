@@ -22,13 +22,18 @@ export function undo() {
 		import('./ui.js').then(({ toast }) => toast('Nothing to undo', 'warn'));
 		return;
 	}
+	const ids = [];
 	JSON.parse(S.history.pop()).forEach(s => {
 		const c = S.components.find(x => x.id === s.id);
 		if (!c) return;
+		if (c.x !== s.x || c.y !== s.y || c.rotation !== s.rotation || c.flipX !== s.flipX) ids.push(c.id);
 		c.x = s.x; c.y = s.y; c.rotation = s.rotation; c.flipX = s.flipX;
 	});
 	// routeWires() fully syncs all geometry (including restored rotations)
 	// and positions into WireBender before calling routeAll().
-	routeWires();
+	routeWires().then(async () => {
+		const { saveComponentLayout } = await import('./app.js');
+		for (const id of ids) await saveComponentLayout(id);
+	});
 	import('./ui.js').then(({ toast }) => toast('Undone'));
 }
