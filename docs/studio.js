@@ -908,9 +908,15 @@ async function processZIP(file) {
 			catch (e) { throw new Error('device.json is corrupt.'); }
 			if (!isValidDeviceManifest(manifest))
 				throw new Error('ZIP contains device.json, but it is missing required fields (id, name, boards).');
+			const deviceExists = deviceList.some(d => d.id === manifest.device.id);
+			if (!deviceExists) {
+				// New device: nothing to merge or overwrite, import silently
+				await restoreDevice(manifest, imageMap);
+				return;
+			}
 			const vMsg = manifest.version ? ` (v${manifest.version})` : '';
 			const sMsg = manifest.source  ? `\nSource: ${manifest.source}` : '';
-			if (confirm(`Restore Device: "${manifest.device.name}"${vMsg}?${sMsg}\n\nThis will merge boards and overwrite existing components.`))
+			if (confirm(`Device "${manifest.device.name}"${vMsg} already exists.${sMsg}\n\nThis will merge boards and overwrite existing components.`))
 				await restoreDevice(manifest, imageMap);
 			return;
 		}
