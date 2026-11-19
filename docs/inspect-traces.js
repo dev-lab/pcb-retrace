@@ -47,6 +47,8 @@ const TraceConfig = {
 	WASM_URL: 'https://dev-lab.github.io/WireBender/latest/WireBender.js',
 	/** WireBender WASM binary. */
 	WASM_BINARY_URL: 'https://dev-lab.github.io/WireBender/latest/WireBender.wasm',
+	/** Worker script that hosts the PcbVisualizer WASM. */
+	WORKER_URL: 'inspect-worker.js',
 };
 
 /**
@@ -70,6 +72,8 @@ class NetSignature {
 	}
 }
 
+const TRACE_CANCELLED = Symbol('trace-cancelled');
+
 /**
  * In-memory cache of generated traces, keyed by net id. Traces are stored in
  * the reference-image coordinate space and never persisted to DB/project files.
@@ -90,6 +94,11 @@ class TraceCache {
 		this._module = opts.module || null;
 		/** Diagnostic counters (also used by tests). */
 		this.stats = { routeCalls: 0, netsRouted: 0 };
+		this._worker = null;
+		this._pending = null;		// { id, resolve, reject } for the single in-flight call
+		this._seq = 0;
+		this._workerFailed = false;
+		this._opts = opts;			// tests inject module/moduleLoader → in-thread path
 	}
 
 	/**
@@ -130,7 +139,10 @@ class TraceCache {
 	 * @param refId reference image id (coordinate space key)
 	 * @param projectNodeToRef (node) => {x,y}|null — node native coords → ref space
 	 * @param forceAll force a full recompute of all nets
-	 * @returns Promise<boolean> whether any routing was performed
+	 * @return Promise<boolean|null>
+	 *	 true  = routing was performed
+	 *	 false = nothing needed routing
+	 *	 null  = routing was cancelled by a newer request (cache untouched)
 	 */
 	async ensure(nets, refId, projectNodeToRef, forceAll = false) {
 		if (this.refId !== refId) {
@@ -155,86 +167,147 @@ class TraceCache {
 		if (changed.length === 0) return false;
 
 		const routeSet = (this.recalcMode === 'all' || forceAll) ? nets : changed;
-		await this._route(routeSet, projectNodeToRef);
-		return true;
+		const completed = await this._route(routeSet, projectNodeToRef);
+		return completed ? true : null;	  // null = cancelled by a newer request
 	}
 
 	/**
 	 * Route the given nets with a single PcbVisualizer pass and store results.
 	 * @param nets nets to route
 	 * @param projectNodeToRef projection into reference space
+	 * @return Promise<boolean> false if cancelled
 	 */
 	async _route(nets, projectNodeToRef) {
-		// Project pads into the reference coordinate space.
+		// Snapshot signature + name NOW (before any await): the live active net
+		// can be mutated while the worker is routing.
 		const prepared = nets.map(net => {
 			const pads = [];
 			(net.nodes || []).forEach(node => {
 				const p = projectNodeToRef(node);
 				if (p && isFinite(p.x) && isFinite(p.y)) pads.push({ x: p.x, y: p.y });
 			});
-			return { net, pads };
+			return { net, pads, sig: NetSignature.of(net), name: net.name };
 		});
 
-		// Nets with < 2 pads cannot be routed — store empty geometry but record
-		// the current signature so they are not retried every refresh. Pad
-		// positions are kept regardless, so a lone pin can still be rendered.
-		prepared.forEach(({ net, pads }) => {
+		// Nets with < 2 pads can't be routed: store empty geometry (synchronous).
+		prepared.forEach(({ net, pads, sig, name }) => {
 			if (pads.length < 2) {
-				this.entries.set(net.id, {
-					sig: NetSignature.of(net), name: net.name, wires: [], junctions: [], pads,
-				});
+				this.entries.set(net.id, { sig, name, wires: [], junctions: [], pads });
 			}
 		});
 
 		const routable = prepared.filter(p => p.pads.length >= 2);
 		this.stats.routeCalls++;
-		if (routable.length === 0) return;
+		if (routable.length === 0) return true;
 
+		let byKey;
+		try {
+			byKey = await this._compute(routable.map(({ net, pads }) => ({ id: net.id, pads })));
+		} catch (e) {
+			if (e === TRACE_CANCELLED) return false;   // entries untouched → stale nets re-route next time
+			throw e;
+		}
+
+		routable.forEach(({ net, pads, sig, name }) => {
+			const data = byKey[net.id] || { wires: [], junctions: [] };
+			this.entries.set(net.id, { sig, name, wires: data.wires, junctions: data.junctions, pads });
+		});
+		this.stats.netsRouted += routable.length;
+		return true;
+	}
+
+	_useWorker() {
+		return typeof Worker !== 'undefined' && !this._workerFailed &&
+			!this._opts.module && !this._opts.moduleLoader;
+	}
+
+	async _compute(items) {
+		if (this._useWorker()) {
+			try { return await this._computeInWorker(items); }
+			catch (e) { if (e === TRACE_CANCELLED || !this._workerFailed) throw e; }
+		}
+		return this._computeLocal(items);	// fallback / tests
+	}
+
+	_spawnWorker() {
+		try {
+			const w = new Worker(TraceConfig.WORKER_URL, { type: 'module' });
+			w.onmessage = e => {
+				const p = this._pending;
+				if (!p || e.data.id !== p.id) return;
+				this._pending = null;
+				e.data.ok ? p.resolve(e.data.result) : p.reject(new Error(e.data.error));
+			};
+			w.onerror = ev => {
+				console.error('[TraceCache] worker error', ev);
+				this._workerFailed = true;
+				const p = this._pending; this._pending = null;
+				this._worker = null;
+				if (p) p.reject(new Error('worker error'));
+			};
+			w.postMessage({ type: 'init', jsUrl: TraceConfig.WASM_URL, wasmUrl: TraceConfig.WASM_BINARY_URL });
+			this._worker = w;
+			return w;
+		} catch (e) {
+			this._workerFailed = true;
+			return null;
+		}
+	}
+
+	/**
+	 * Warm the worker so the first route doesn't pay the WASM load.
+	 */
+	warmUp() { if (this._useWorker() && !this._worker) this._spawnWorker(); }
+
+	/**
+	 * Cancel the in-flight worker call (if any) and start a warm replacement.
+	 */
+	cancel() { if (this._pending) this._cancelPending(); }
+
+	_cancelPending() {
+		const p = this._pending; this._pending = null;
+		if (this._worker) { this._worker.terminate(); this._worker = null; }
+		if (p) p.reject(TRACE_CANCELLED);
+		this._spawnWorker();   // warm replacement
+	}
+
+	_computeInWorker(items) {
+		if (this._pending) this._cancelPending();
+		const w = this._worker || this._spawnWorker();
+		if (!w) return Promise.reject(new Error('no worker'));
+		const id = ++this._seq;
+		return new Promise((resolve, reject) => {
+			this._pending = { id, resolve, reject };
+			w.postMessage({ type: 'route', id, items });
+		});
+	}
+
+	async _computeLocal(items) {
 		const M = await this._getModule();
 		const pcb = new M.PcbVisualizer();
+		const byKey = {};
 		try {
-			routable.forEach(({ net, pads }) => {
+			items.forEach(({ id, pads }) => {
 				const vec = new M.VectorPoint2D();
 				pads.forEach(p => vec.push_back({ x: p.x, y: p.y }));
-				// Use the net id as routing key to avoid duplicate-name collisions.
-				pcb.addNet({ name: net.id, pads: vec });
+				pcb.addNet({ name: id, pads: vec });
 				vec.delete();
 			});
-
 			const result = pcb.route();
-			const byKey = {};
-
 			for (let i = 0; i < result.wires.size(); i++) {
-				const wire = result.wires.get(i);
-				const key = wire.net;
-				if (!byKey[key]) byKey[key] = { wires: [], junctions: [] };
-				const pts = [];
-				for (let j = 0; j < wire.points.size(); j++) {
-					const p = wire.points.get(j);
-					pts.push({ x: p.x, y: p.y });
-				}
-				if (pts.length >= 2) byKey[key].wires.push(pts);
+				const wire = result.wires.get(i), pts = [];
+				for (let j = 0; j < wire.points.size(); j++) { const p = wire.points.get(j); pts.push({ x: p.x, y: p.y }); }
+				if (pts.length >= 2) (byKey[wire.net] ||= { wires: [], junctions: [] }).wires.push(pts);
 			}
-
 			for (let i = 0; i < result.junctions.size(); i++) {
 				const d = result.junctions.get(i);
-				const key = d.net;
-				if (!byKey[key]) byKey[key] = { wires: [], junctions: [] };
-				byKey[key].junctions.push({ x: d.position.x, y: d.position.y });
+				(byKey[d.net] ||= { wires: [], junctions: [] }).junctions.push({ x: d.position.x, y: d.position.y });
 			}
-
-			routable.forEach(({ net, pads }) => {
-				const data = byKey[net.id] || { wires: [], junctions: [] };
-				this.entries.set(net.id, {
-					sig: NetSignature.of(net), name: net.name,
-					wires: data.wires, junctions: data.junctions, pads,
-				});
-			});
-			this.stats.netsRouted += routable.length;
 		} finally {
-			try { if (pcb.clear) pcb.clear(); } catch (_) { /* ignore */ }
-			try { if (pcb.delete) pcb.delete(); } catch (_) { /* ignore */ }
+			try { if (pcb.clear) pcb.clear(); } catch (_) {}
+			try { if (pcb.delete) pcb.delete(); } catch (_) {}
 		}
+		return byKey;
 	}
 }
 

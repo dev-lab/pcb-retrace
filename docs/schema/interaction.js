@@ -164,13 +164,11 @@ function d4delta(current, target) {
 	return d4compose(target, d4inverse(current));
 }
 
-async function _saveThenRoute(id) {
+async function _commitMove(id) {
+	moveComponentRoute(id).catch(e => console.error('[schema] route failed', e)); // cancels in-flight route now
 	if (_saveComponentLayout) {
-		try { await _saveComponentLayout(id); }
-		catch (e) { console.error('[schema] save failed', e); }
+		Promise.resolve(_saveComponentLayout(id)).catch(e => console.error('[schema] save failed', e));
 	}
-	try { await moveComponentRoute(id); }
-	catch (e) { console.error('[schema] moveComponentRoute failed', e); }
 }
 
 function _rotateComp(comp, delta) {
@@ -182,7 +180,7 @@ function _rotateComp(comp, delta) {
 	comp.flipX = next.flipX;
 	showProperties(comp);
 	updateSidePanels();
-	_saveThenRoute(comp.id);
+	_commitMove(comp.id);
 }
 
 // ── Touch long-press for context menu ─────────────────────────
@@ -293,7 +291,7 @@ export function initInteraction(saveComponentLayout, saveViewport) {
 		if (S.dragging) {
 			const movedId = S.dragging.compId;
 			S.dragging = null;
-			_saveThenRoute(movedId);
+			_commitMove(movedId);
 			return;
 		}
 		if (S.panning) {
@@ -309,7 +307,7 @@ export function initInteraction(saveComponentLayout, saveViewport) {
 		if (S.dragging) {
 			const movedId = S.dragging.compId;
 			S.dragging = null;
-			_saveThenRoute(movedId);
+			_commitMove(movedId);
 		}
 		if (S.panning) {
 			S.panning = false; S.panStart = null;
@@ -469,7 +467,7 @@ export function initInteraction(saveComponentLayout, saveViewport) {
 				// Drag finished
 				if (_touchDragType === 'comp' && S.dragging) {
 					const movedId = S.dragging.compId;
-					_saveThenRoute(movedId);
+					_commitMove(movedId);
 				} else if ((_touchDragType === 'pan' || _touchDragType === 'zoom') && _saveViewport) {
 					_saveViewport();
 				}

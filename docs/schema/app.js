@@ -355,10 +355,7 @@ async function _ingestParsed(parsed, studioComps = [], boardId = null) {
 	updateSidePanels();
 }
 
-// ── Autosave: component layout after drag or rotation ─────────
-// Called by interaction.js after every drag-drop and rotation.
-// compId is S.components[].id (not studioId).
-export async function saveComponentLayout(compId) {
+async function _saveComponentLayoutNow(compId) {
 	if (!_schema) return;
 	const comp = S.components.find(c => c.id === compId);
 	// console.log('[schema] saveComponentLayout', compId,
@@ -390,6 +387,33 @@ export async function saveComponentLayout(compId) {
 	const savedScs = await db.getSchemaComponents(_schema.id);
 	_schemaCompMap = {};
 	savedScs.forEach(sc => { _schemaCompMap[sc.componentId] = sc; });
+}
+
+
+// serialized + coalesced public entry point
+const _dirtyIds = new Set();
+let _drain = null;
+
+// ── Autosave: component layout after drag or rotation ─────────
+// Called by interaction.js after every drag-drop and rotation.
+// compId is S.components[].id (not studioId).
+export function saveComponentLayout(compId) {
+	_dirtyIds.add(compId);
+	if (!_drain) {
+		_drain = (async () => {
+			try {
+				while (_dirtyIds.size) {
+					const ids = [..._dirtyIds];
+					_dirtyIds.clear();
+					for (const id of ids) {
+						try { await _saveComponentLayoutNow(id); }
+						catch (e) { console.error('[schema] save failed', id, e); }
+					}
+				}
+			} finally { _drain = null; }
+		})();
+	}
+	return _drain;
 }
 
 // ── Autosave: viewport after pan/zoom ─────────────────────────

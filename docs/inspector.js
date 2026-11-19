@@ -37,6 +37,13 @@ class Inspector {
 		// Initialization State Lock
 		this.initPromise = null;
 		this.needsSync = false;
+
+		// Async-run tokens: a newer run invalidates any older in-flight run
+		this._traceGen = 0;
+		this._nodeGen = 0;
+		this._traceTimer = null;
+		this._traceWaiters = [];
+		this.traceCache.warmUp();
 	}
 
 	async getImageResolution(img) {
@@ -64,6 +71,13 @@ class Inspector {
 	}
 
 	async _performInit() {
+		// Board/layer set may have changed: invalidate in-flight async runs
+		this._traceGen++;
+		this._nodeGen++;
+		this.traceCache.cancel();
+		this.traceRenderCache = {};
+		this.netNodeCache = {};
+
 		this.bomCache = {}; // Clear cache on re-init
 		this.backImagesCache = null; // Clear back-side cache
 		this.sidebarList.innerHTML = '';
@@ -445,17 +459,21 @@ class Inspector {
 	}
 
 	async updateNetNodeCache() {
-		this.netNodeCache = {};
-		if (!this.activeNet || !this.activeNet.nodes) return;
+		const gen = ++this._nodeGen; // newer calls invalidate this one
+		if (!this.activeNet || !this.activeNet.nodes) {
+			this.netNodeCache = {};
+			Object.values(this.viewers).forEach(v => v.draw());
+			return;
+		}
 
+		const cache = {};
 		// Initialize arrays for currently visible layers
-		for (const vid of this.visibleIds) this.netNodeCache[vid] = [];
+		for (const vid of this.visibleIds) cache[vid] = [];
 
-		for (const node of this.activeNet.nodes) {
+		for (const node of this.activeNet.nodes.slice()) {
 			// 1. Direct Nodes (Source)
-			// Safety Check: Ensure the cache array exists before pushing
-			if (this.netNodeCache[node.imgId]) {
-				this.netNodeCache[node.imgId].push({
+			if (cache[node.imgId]) {
+				cache[node.imgId].push({
 					x: node.x, y: node.y, label: node.label,
 					color: '#2563eb', isSource: true, origNode: node
 				});
@@ -463,25 +481,25 @@ class Inspector {
 
 			// 2. Inferred Nodes (Projected)
 			const paths = await ImageGraph.solvePaths(node.imgId, this.cv, this.db);
+			if (gen !== this._nodeGen) return; // a newer run owns the cache
 			for (const p of paths) {
-				// CHANGE: Check this.netNodeCache[p.id] instead of this.visibleIds.has(p.id)
-				// This prevents the crash if netNodeCache was reset by a concurrent call
-				if (this.netNodeCache[p.id]) {
-					const proj = this.cv.projectPoint(node.x, node.y, p.H);
-					if (proj) {
-						this.netNodeCache[p.id].push({
-							x: proj.x, y: proj.y, label: node.label,
-							color: '#4ade80', isSource: false, origNode: node
-						});
-					}
+				if (!cache[p.id]) continue;
+				const proj = this.cv.projectPoint(node.x, node.y, p.H);
+				if (proj) {
+					cache[p.id].push({
+						x: proj.x, y: proj.y, label: node.label,
+						color: '#4ade80', isSource: false, origNode: node
+					});
 				}
 			}
 		}
+		this.netNodeCache = cache;
 		Object.values(this.viewers).forEach(v => v.draw());
 	}
 
 	/**
 	 * Recompute the per-image trace draw lists from the (cached) routed traces.
+	 * Debounced entry point: coalesces bursts of edits, routes after the last one.
 	 *
 	 * Traces are routed only once per change set via the PcbVisualizer WASM API
 	 * and stored in this.traceCache (reference-image space). Here we merely reuse
@@ -489,19 +507,43 @@ class Inspector {
 	 * no per-view recalculation of routing occurs.
 	 * @param forceAll force a full re-route of every net (cache invalidation)
 	 */
-	async updateTraceRenderCache(forceAll = false) {
-		this.traceRenderCache = {};
-		if (typeof currentBomId === 'undefined' || !currentBomId) return;
-		if (typeof ImageGraph === 'undefined') return;
+	updateTraceRenderCache(forceAll = false) {
+		if (forceAll) this._forceTraceRecalc = true;
+		this._traceGen++;				   // invalidates any in-flight run
+		this.traceCache.cancel();		   // stop the worker now, like the schematic
+		clearTimeout(this._traceTimer);
+		return new Promise(resolve => {
+			this._traceWaiters.push(resolve);
+			this._traceTimer = setTimeout(async () => {
+				const waiters = this._traceWaiters.splice(0);
+				try { await this._updateTraceRenderCacheNow(); }
+				finally { waiters.forEach(r => r()); }
+			}, 150);
+		});
+	}
+
+	async _updateTraceRenderCacheNow() {
+		const gen = this._traceGen;
+
+		if (typeof currentBomId === 'undefined' || !currentBomId || typeof ImageGraph === 'undefined') {
+			this.traceRenderCache = {};
+			return;
+		}
 
 		const refId = this._traceReferenceId();
-		if (!refId) return;
+		if (!refId) {
+			this.traceRenderCache = {};
+			return;
+		}
 		this.traceRefId = refId;
 
 		const nets = await this._collectNets();
+		if (gen !== this._traceGen) return;		  // superseded before touching the cache
 
 		// One Dijkstra solve gives both directions (via inverse) for every image.
 		const refPaths = await ImageGraph.solvePaths(refId, this.cv, this.db);
+		if (gen !== this._traceGen) return;		  // superseded before ensure() mutates the cache
+
 		const fwd = {}; // refId → id
 		const inv = {}; // id → refId
 		refPaths.forEach(p => {
@@ -517,13 +559,20 @@ class Inspector {
 			return this.cv.projectPoint(node.x, node.y, H);
 		};
 
+		let status = false;
+		let failed = false;
 		try {
-			await this.traceCache.ensure(nets, refId, projectNodeToRef, forceAll || this._forceTraceRecalc);
+			status = await this.traceCache.ensure(nets, refId, projectNodeToRef, this._forceTraceRecalc);
 		} catch (e) {
 			console.error('[Inspector] trace routing failed', e);
+			failed = true;
 		}
-		this._forceTraceRecalc = false;
+		if (gen !== this._traceGen) return;			 // superseded: the newer run owns the result
+		if (status === null) return;				 // cancelled: a newer call will build the draw lists
+		if (!failed) this._forceTraceRecalc = false; // only cleared once the forced route really completed
 
+		// Build into a local object; existing traces stay visible until the swap.
+		const next = {};
 		const activeId = this.activeNet ? this.activeNet.id : null;
 		for (const id of this.visibleIds) {
 			let projectPointFn;
@@ -531,13 +580,14 @@ class Inspector {
 				projectPointFn = (pt) => pt;
 			} else {
 				const H = fwd[id];
-				if (!H) { this.traceRenderCache[id] = []; continue; }
+				if (!H) { next[id] = []; continue; }
 				projectPointFn = (pt) => this.cv.projectPoint(pt.x, pt.y, H);
 			}
-			this.traceRenderCache[id] = this.traceRenderer.buildDrawList(
+			next[id] = this.traceRenderer.buildDrawList(
 				nets, activeId, this.showInactiveTraces, projectPointFn);
 		}
 
+		this.traceRenderCache = next;
 		Object.values(this.viewers).forEach(v => v.draw());
 	}
 

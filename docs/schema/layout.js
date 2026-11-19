@@ -4,225 +4,141 @@
  * See LICENSE file for details.
  */
 
-// ═══════════════════════════════════════════════════════════════
-//	LAYOUT — WireBender placement + routing
-//
-//	Replaces the previous ELK-based layout.js entirely.
-//
-//	Workflow (mirrors the prototype in wirebender-test.html):
-//		1. Load WASM module once at startup (initWireBender)
-//		2. On netlist load / auto-layout:
-//				 buildAndRoute()	→ clears wb, re-adds everything,
-//														classify → computePlacement → routeAll
-//		3. On component drag drop:
-//				 routeWires()			→ setComponentPlacement → routeAll
-//				 (visual-only drag happens in interaction.js; no routing
-//					during the drag, only on drop)
-//
-//	Persistent instance pattern (from prototype):
-//		A single WireBender instance (_wb) is created once and kept
-//		alive for the session.	It is destroyed + recreated only when
-//		buildAndRoute() is called (full re-layout).	 This is required
-//		because setComponentPlacement / routeAll operate on libavoid's
-//		live router state.
-// ═══════════════════════════════════════════════════════════════
-
+/*
+ * layout.js — WireBender placement + routing, executed in a cancellable Worker.
+ * See router-worker.js. Any new change kills in-flight routing; the next route
+ * runs after the last change (debounced) and is a full re-sync if state was lost.
+ */
 import { S } from './state.js';
 import { createComp } from './components.js';
 import { render } from './draw.js';
 
-// ── Module loading ────────────────────────────────────────────
-let _WB = null;	 // WireBender WASM module (Module object)
-let _wb = null;	 // persistent WireBender instance
+const DEBOUNCE_MS = 120;
+const CANCELLED = Symbol('cancelled');
 
-let _modulePromise = null;
+let _worker = null;
+let _workerValid = false;		// does the worker hold live router state matching S?
+let _needFull = true;
+let _seq = 0;
+let _inflight = null;			// { cancellable, waiters }
+let _timer = null;
+let _waiters = [];
+let _pendingReplaces = [];
+const _pendingMoves = new Set();
+let _placementTail = Promise.resolve();
 
-/**
- * Loads the WASM module once.	Subsequent calls return the same promise.
- * Must be called (and awaited) before any routing.
- *
- * Expects WireBender.js and WireBender.wasm to be at the same URL path
- * as the HTML page (i.e. served from the project root alongside index.html).
- * @returns Promise
- */
-export function initWireBender() {
-	if (_modulePromise) return _modulePromise;
-	_modulePromise = import('https://dev-lab.github.io/WireBender/latest/WireBender.js')
-		.then(m => m.default({
-			locateFile: f => f === 'WireBender.wasm' ? 'https://dev-lab.github.io/WireBender/latest/WireBender.wasm' : f,
-		}))
-		.then(module => {
-			_WB = module;
-			console.log('[WireBender] WASM module loaded');
-		})
-		.catch(err => {
-			console.error('[WireBender] Failed to load WASM module:', err);
-			// Surface to UI via lazy import to avoid circular dep
-			import('./ui.js').then(({ toast }) =>
-				toast('WireBender WASM failed to load — check console', 'err'));
-		});
-	return _modulePromise;
+// ── Worker lifecycle ──────────────────────────────────────────
+function _spawn() {
+	const w = new Worker(new URL('./router-worker.js', import.meta.url), { type: 'module' });
+	w._calls = new Map();
+	w.onmessage = e => {
+		const { id, ok, result, error } = e.data;
+		const c = w._calls.get(id);
+		if (!c) return;
+		w._calls.delete(id);
+		ok ? c.resolve(result) : c.reject(new Error(error));
+	};
+	w.onerror = e => {
+		console.error('[router] worker error', e);
+		w._calls.forEach(c => c.reject(new Error('worker error')));
+		w._calls.clear();
+		if (_worker === w) { _workerValid = false; _needFull = true; }
+	};
+	_worker = w;
+	_workerValid = false;
+	return w;
 }
 
-/**
- * Destroy persistent WireBender instance.
- */
-function _destroyInstance() {
-	if (_wb) {
-		try { _wb.delete(); } catch (_) { /* ignore */ }
-		_wb = null;
-	}
-}
+/** Warm up the worker (called at startup). */
+export function initWireBender() { if (!_worker) _spawn(); }
 
-/**
- * Build WireBender netlist from S
- * Feeds S.components and S.nets into a freshly-created WireBender
- * instance.
- *
- * Call after _wb is (re)created.
- */
-function _populateWb() {
-	// Step 1: add components
-	S.components.forEach(comp => {
-		const desc = createComp(comp).wbDescriptor();
-		const pinsVec = new _WB.VectorPinDescriptor();
-		desc.pins.forEach(p => pinsVec.push_back({
-			number: p.number,
-			name: p.name,
-			x: p.x,
-			y: p.y,
-			directionFlags: p.directionFlags,
-		}));
-		_wb.addComponent({
-			id: desc.id,
-			width: desc.width,
-			height: desc.height,
-			padding: desc.padding,
-			pins: pinsVec,
-		});
-		pinsVec.delete();
+function _call(msg) {
+	const w = _worker || _spawn();
+	const id = ++_seq;
+	return new Promise((resolve, reject) => {
+		w._calls.set(id, { resolve, reject });
+		w.postMessage({ id, ...msg });
 	});
+}
 
-	// Step 2: add nets (only those with ≥ 2 nodes)
+/** Hard-cancel: terminate the worker mid-computation, spawn a warm replacement. */
+function _kill() {
+	const w = _worker;
+	if (!w) return;
+	w.terminate();
+	w._calls.forEach(c => c.reject(CANCELLED));
+	w._calls.clear();
+	_needFull = true;		// libavoid state is gone → next route must fully re-sync
+	_spawn();
+}
+
+// ── Model serialisation (plain data only) ─────────────────────
+function _placement(c) {
+	return { position: { x: c.x, y: c.y }, transform: { rotation: c.rotation || 0, flipX: c.flipX || false } };
+}
+
+function _placementsFromS() {
+	const o = {};
+	S.components.forEach(c => { o[c.id] = _placement(c); });
+	return o;
+}
+
+function _buildModel() {
+	const components = S.components.map(c => createComp(c).wbDescriptor());
+	const nets = [];
 	S.nets.forEach(net => {
-		const nodes = (net.nodes || []).filter(nd =>
-			S.components.find(c => c.ref === nd.ref)
-		);
+		const nodes = (net.nodes || []).filter(nd => S.components.find(c => c.ref === nd.ref));
 		if (nodes.length < 2) return;
-
-		const pinsVec = new _WB.VectorPinRef();
+		const pins = [];
 		nodes.forEach(nd => {
 			const comp = S.components.find(c => c.ref === nd.ref);
-			if (!comp) return;
-			// Find pin index (0-based) → WireBender pin number (1-based)
-			const pinIdx = comp.pins.findIndex(
-				p => p.originalName === nd.pin || p.originalName === String(nd.pin) ||
-					p.name === nd.pin || p.name === String(nd.pin)
-			);
-			pinsVec.push_back({
-				componentId: comp.id,
-				pinNumber: pinIdx >= 0 ? pinIdx + 1 : 1,
-			});
+			const idx = comp.pins.findIndex(p =>
+				p.originalName === nd.pin || p.originalName === String(nd.pin) ||
+				p.name === nd.pin || p.name === String(nd.pin));
+			pins.push({ componentId: comp.id, pinNumber: idx >= 0 ? idx + 1 : 1 });
 		});
-		_wb.addNet({ name: net.name, pins: pinsVec });
-		pinsVec.delete();
+		nets.push({ name: net.name, pins });
 	});
+	return { components, nets };
 }
 
-/**
- * Apply a SchematicRouteResult into S.wires / S.junctionPoints.
- *
- * Converts Emscripten vectors to plain JS arrays.
- * @param result routing result (wires, junctions)
- * @param affectedNets: if given, replaces only those nets; otherwise full rebuild.
- */
+// ── Apply plain results into S ────────────────────────────────
 function _applyRouteResult(result, affectedNets = null) {
-	// Build map: netName → {wires:[[pts]], junctions:[{x,y}]}
 	const byNet = {};
+	const slot = n => (byNet[n] ||= { wires: [], junctions: [] });
 
-	for (let i = 0; i < result.wires.size(); i++) {
-		const wire = result.wires.get(i);
-		const net = wire.net;
-		if (!byNet[net]) byNet[net] = { wires: [], junctions: [] };
-		const pts = [];
-		for (let j = 0; j < wire.points.size(); j++) {
-			const p = wire.points.get(j);
-			pts.push({ x: p.x, y: p.y });
-		}
-		if (pts.length >= 2) byNet[net].wires.push(pts);
-	}
+	result.wires.forEach(w => { if (w.points.length >= 2) slot(w.net).wires.push(w.points); });
+	result.junctions.forEach(j => slot(j.net).junctions.push({ x: j.position.x, y: j.position.y }));
 
-	for (let i = 0; i < result.junctions.size(); i++) {
-		const jd = result.junctions.get(i);
-		const net = jd.net;
-		if (!byNet[net]) byNet[net] = { wires: [], junctions: [] };
-		byNet[net].junctions.push({ x: jd.position.x, y: jd.position.y });
-	}
-
-	// Helper: write wire data for one net into S
 	const applyNet = netName => {
 		const nd = byNet[netName];
 		if (!nd) return;
-
-		// Remove existing wires for this net
 		S.wires = S.wires.filter(w => w.net !== netName);
-		// Remove existing junctions for this net
 		S.junctionPoints = (S.junctionPoints || []).filter(jp => jp.net !== netName);
-
-		let wireSeq = 0;
-		nd.wires.forEach(pts => {
-			S.wires.push({
-				id: `wb_${netName}_${wireSeq++}`,
-				net: netName,
-				points: pts,
-				pinA: null,		// WireBender owns routing — we don't track pin refs per wire
-				pinB: null,
-			});
-		});
-
-		nd.junctions.forEach(j => {
-			S.junctionPoints.push({ x: j.x, y: j.y, net: netName });
-		});
+		let seq = 0;
+		nd.wires.forEach(pts => S.wires.push({ id: `wb_${netName}_${seq++}`, net: netName, points: pts, pinA: null, pinB: null }));
+		nd.junctions.forEach(j => S.junctionPoints.push({ x: j.x, y: j.y, net: netName }));
 	};
 
 	if (affectedNets) {
-		// Incremental update
 		affectedNets.forEach(applyNet);
 	} else {
-		// Full rebuild
 		S.wires = [];
 		S.junctionPoints = [];
 		Object.keys(byNet).forEach(applyNet);
 	}
 
-	// Generate WIP stubs for single-node nets
-	_applyWipStubs();
-
-	// Extract component label hints if the WASM module provided them
 	S.componentLabels = {};
-	if (result.componentLabels) {
-		for (let i = 0; i < result.componentLabels.size(); i++) {
-			const hint = result.componentLabels.get(i);
-			S.componentLabels[hint.componentId] = {
-				refPosition: { x: hint.refPosition.x, y: hint.refPosition.y },
-				refIsVertical: hint.refIsVertical,
-				valuePosition: { x: hint.valuePosition.x, y: hint.valuePosition.y },
-				valueIsVertical: hint.valueIsVertical
-			};
-		}
-	}
+	(result.componentLabels || []).forEach(h => {
+		S.componentLabels[h.componentId] = {
+			refPosition: h.refPosition, refIsVertical: h.refIsVertical,
+			valuePosition: h.valuePosition, valueIsVertical: h.valueIsVertical,
+		};
+	});
 
-	// Generate WIP stubs for single-node nets
 	_applyWipStubs();
 }
 
-/**
- * WIP stubs (single-node nets).
- *
- * For nets with only one connected pin, draw a short dangling stub
- * so the connection is visible. WireBender only routes nets with
- * ≥ 2 nodes; stubs are synthesised here.
- */
 function _applyWipStubs() {
 	S.nets.forEach(net => {
 		if ((net.nodes || []).length !== 1) return;
@@ -230,49 +146,99 @@ function _applyWipStubs() {
 		const comp = S.components.find(c => c.ref === nd.ref);
 		if (!comp) return;
 		const pins = createComp(comp).pinPositions();
-		const pinIdx = comp.pins.findIndex(
-			p => p.originalName === nd.pin || p.originalName === String(nd.pin) ||
-				p.name === nd.pin || p.name === String(nd.pin)
-		);
+		const pinIdx = comp.pins.findIndex(p =>
+			p.originalName === nd.pin || p.originalName === String(nd.pin) ||
+			p.name === nd.pin || p.name === String(nd.pin));
 		const p = pins[pinIdx >= 0 ? pinIdx : 0];
 		if (!p) return;
-		// Remove any previous stub for this net
 		S.wires = S.wires.filter(w => w.id !== `wip_${net.name}`);
 		S.wires.push({
-			id: `wip_${net.name}`,
-			net: net.name,
-			points: [
-				{ x: p.x, y: p.y },
-				{ x: p.x + p.ex * 32, y: p.y + p.ey * 32 },
-			],
-			pinA: { compId: comp.id, pinName: p.pinName },
-			pinB: null,
+			id: `wip_${net.name}`, net: net.name,
+			points: [{ x: p.x, y: p.y }, { x: p.x + p.ex * 32, y: p.y + p.ey * 32 }],
+			pinA: { compId: comp.id, pinName: p.pinName }, pinB: null,
 		});
 	});
 }
 
-/**
- * Write component placements from WireBender into S.
- * @param placements component placements
- */
 function _applyPlacements(placements) {
 	for (const id in placements) {
-		const placement = placements[id];
+		const pl = placements[id];
 		const comp = S.components.find(c => c.id === id);
 		if (!comp) continue;
-		comp.x = placement.position.x;
-		comp.y = placement.position.y;
-		comp.rotation = placement.transform.rotation;
-		comp.flipX = placement.transform.flipX;
+		comp.x = pl.position.x;
+		comp.y = pl.position.y;
+		comp.rotation = pl.transform.rotation;
+		comp.flipX = pl.transform.flipX;
 	}
 }
 
-/**
- * Fit viewport.
- *
- * Always calls render() so every caller - buttons, keyboard, post-route -
- * doesn't have to remember to chain it.
- */
+// ── Scheduler: cancel on change, route after last change ──────
+function _schedule() {
+	if (_inflight) {
+		if (!_inflight.cancellable) return;	  // placement run: finishes first, then re-schedules
+		_kill();							  // cancel immediately
+	}
+	clearTimeout(_timer);
+	_timer = setTimeout(_dispatch, DEBOUNCE_MS);
+}
+
+function _requestRoute({ moves = [], replace = null, full = false }) {
+	if (full) _needFull = true;
+	moves.forEach(id => _pendingMoves.add(id));
+	if (replace) _pendingReplaces.push(replace);
+	return new Promise(res => { _waiters.push(res); _schedule(); });
+}
+
+async function _dispatch() {
+	_timer = null;
+	if (_inflight || _waiters.length === 0) return;
+
+	const full = _needFull || !_workerValid;
+	let msg;
+	if (full) {
+		msg = { type: 'build', model: _buildModel(), placements: _placementsFromS(), runPlacement: false };
+	} else {
+		const ops = [];
+		for (const r of _pendingReplaces) {
+			const c = S.components.find(x => x.id === r.compId);
+			if (c) ops.push({ op: 'replace', compId: c.id, desc: createComp(c).wbDescriptor(), pinMap: r.pinMap });
+		}
+		for (const id of _pendingMoves) {
+			const c = S.components.find(x => x.id === id);
+			if (c) ops.push({ op: 'move', compId: id, placement: _placement(c) });
+		}
+		msg = { type: 'incremental', ops };
+	}
+	_pendingMoves.clear();
+	_pendingReplaces = [];
+	_needFull = false;
+
+	const job = { cancellable: true, waiters: _waiters.splice(0) };
+	_inflight = job;
+	let settled = true;
+	try {
+		const res = await _call(msg);
+		_workerValid = true;
+		if (full) _applyRouteResult(res.route);
+		else res.results.forEach(r => _applyRouteResult(r.route, r.affected));
+		render();
+	} catch (err) {
+		if (err === CANCELLED) {
+			_waiters.unshift(...job.waiters);	// a newer route will answer them
+			settled = false;
+		} else {
+			console.error('[router] routing failed:', err);
+			_needFull = true;
+			import('./ui.js').then(({ toast }) => toast('Routing failed — see console', 'err'));
+		}
+	} finally {
+		if (_inflight === job) _inflight = null;
+	}
+	if (settled) job.waiters.forEach(r => r());
+	if (_waiters.length) _schedule();
+}
+
+// ── Viewport ──────────────────────────────────────────────────
 export function fitView() {
 	if (!S.components.length) return;
 	let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
@@ -288,189 +254,65 @@ export function fitView() {
 	render();
 }
 
+// ── Public API  ───────────────────────────────────────────────
+
 /**
- * Full build + layout.
- *
- * Destroys the old WireBender instance, rebuilds the full netlist.
- * If runPlacement is true, runs classify → computePlacement (respecting locks) → routeAll.
- * If false, bypasses placement entirely and uses exact coordinates from S.components.
- *
- * lockedPlacements: optional map { [compId]: {{x, y}, {rotation, flipX}} } of components
- * that should not be moved during auto-placement (e.g. previously
- * user-positioned components loaded from schemaComponents in DB).
- * Coordinates are world-space centre, same as S.components.x/y.
- *
- * Returns the placement result map { [compId]: {{x, y}, {rotation, flipX}} } so the
- * caller can persist newly-placed components to the DB.
+ * Full build. runPlacement=true runs auto-placement (not cancellable, returns
+ * placements). runPlacement=false just re-routes at current S positions
+ * (cancellable, coalesced).
  */
 export async function buildAndRoute(lockedPlacements = {}, runPlacement = true) {
-	if (!S.components.length) {
-		render(); // Force clear canvas and show empty state
-		return {};
-	}
-	await initWireBender();
-	if (!_WB) return {};
+	if (!S.components.length) { render(); return {}; }
+	if (!runPlacement) { await _requestRoute({ full: true }); return {}; }
 
-	_destroyInstance();
-	_wb = new _WB.WireBender();
+	const run = async () => {
+		// Placement supersedes everything pending
+		clearTimeout(_timer);
+		_pendingMoves.clear();
+		_pendingReplaces = [];
+		if (_inflight && _inflight.cancellable) _kill();
 
-	_populateWb();
-
-	// Classify (bus detection)
-	const cls = _wb.classify();
-	for(let i = 0; i < cls.size(); ++i) {
-		const item = cls.get(i);
-		if(item.isBus) {
-			console.info("Resetting bus:", item.name, "isGround:", item.isGround, "isPositive:", item.isPositive, "busLevel:", item.busLevel);
-			item.isBus = false;
-			item.isGround = false;
-			item.isPositive = false;
-			item.busLevel = -1;
-			cls.set(i, item);
+		const job = { cancellable: false, waiters: [] };
+		_inflight = job;
+		try {
+			const res = await _call({
+				type: 'build', model: _buildModel(), placements: null,
+				locks: lockedPlacements, runPlacement: true,
+			});
+			_workerValid = true;
+			_needFull = false;
+			_applyPlacements(res.placements);
+			_applyRouteResult(res.route);
+			fitView();
+			return res.placements;
+		} catch (err) {
+			console.error('[router] placement failed:', err);
+			_needFull = true;
+			import('./ui.js').then(({ toast }) => toast('Layout failed — see console', 'err'));
+			return {};
+		} finally {
+			if (_inflight === job) _inflight = null;
+			if (_waiters.length) _schedule();
 		}
-	}
-	_wb.applyClassification(cls);
-	cls.delete();
-
-	let placements = {};
-
-	if (runPlacement) {
-		// Apply locked positions before placement
-		if (Object.keys(lockedPlacements).length > 0) {
-			const locks = new _WB.ComponentPlacements();
-			locks.fromObject(lockedPlacements);
-			_wb.setLockedPlacements(locks);
-			locks.delete();
-		}
-
-		placements = _wb.computePlacements().toObject();
-		_applyPlacements(placements);
-	} else {
-		// No placement requested: push exact saved placements directly into WB
-		S.components.forEach(comp => {
-			_wb.setComponentPlacement(comp.id, { position: { x: comp.x, y: comp.y }, transform: { rotation: comp.rotation || 0, flipX: comp.flipX || false } });
-		});
-	}
-
-	// Route
-	const result = _wb.routeAll();
-	_applyRouteResult(result);
-
-	if (runPlacement) fitView();
-	else render();
-
-	return placements;
-}
-
-/**
- * Incremental Move or Transform (Rotate, FlipX) Component.
- * @param compId component ID
- */
-export async function moveComponentRoute(compId) {
-	if (!_wb) { await buildAndRoute(); return; }
-	const comp = S.components.find(c => c.id === compId);
-	if (!comp) return;
-
-	const incResult = _wb.moveComponent(compId, { position: { x: comp.x, y: comp.y }, transform: { rotation: comp.rotation || 0, flipX: comp.flipX || false } });
-
-	// Extract affected nets into a standard JS array
-	const affectedNets = [];
-	for (let i = 0; i < incResult.affectedNets.size(); i++) {
-		affectedNets.push(incResult.affectedNets.get(i));
-	}
-
-	// Apply only to the affected nets
-	_applyRouteResult(incResult.routes, affectedNets);
-	render();
-}
-
-/**
- * Replace Component (Symbol change).
- * @param comp component to replace
- * @param oldToNewMap pin mapping
- */
-export async function replaceComponentRoute(comp, oldToNewMap) {
-	if (!_wb) { await buildAndRoute(); return; }
-
-	const desc = createComp(comp).wbDescriptor();
-	const pinsVec = new _WB.VectorPinDescriptor();
-	desc.pins.forEach(p => pinsVec.push_back({
-		number: p.number,
-		name: p.name,
-		x: p.x,
-		y: p.y,
-		directionFlags: p.directionFlags,
-	}));
-
-	const mapObj = new _WB.PinMap();
-	mapObj.fromObject(oldToNewMap);
-
-	const replacement = {
-		componentId: comp.id,
-		newDescriptor: {
-			id: desc.id,
-			width: desc.width,
-			height: desc.height,
-			padding: desc.padding,
-			pins: pinsVec
-		},
-		pinMapping: mapObj
 	};
-
-	const result = _wb.replaceComponent(replacement);
-	_applyRouteResult(result);
-	render();
-
-	pinsVec.delete();
-	mapObj.delete();
+	// serialise placement runs
+	const p = _placementTail.then(run);
+	_placementTail = p.catch(() => {});
+	return p;
 }
 
-/**
- * Re-route after a manual drag or undo.
- * Fully syncs all component geometry AND positions into WireBender
- * before calling routeAll(). This handles any combination of:
- *	 - position changes (drag)
- *	 - transform changes (undo restoring a previous rotation/flipX)
- *
- * TODO: with changes to placement instead of position, not sure
- * that the fix described below needed.
- * The critical fix: routeWires() must call addComponent() (not just
- * setComponentPlacement()) for every component, because addComponent
- * replaces the geometry registration.	Using only setComponentPosition
- * leaves WireBender with stale pin geometry after rotation/undo, which
- * produces diagonal wire artifacts and wrong wire endpoints.
- */
-export async function routeWires() {
-	if (!S.components.length) return;
-	if (!_wb) { await buildAndRoute(); return; }
+/** Component moved / rotated / flipped (S already updated). */
+export function moveComponentRoute(compId) {
+	return _requestRoute({ moves: [compId] });
+}
 
-	// Sync every component's current geometry and position.
-	// addComponent() replaces the existing registration when called with
-	// the same id — so this is always safe to call unconditionally.
-	S.components.forEach(comp => {
-		const desc = createComp(comp).wbDescriptor();
-		const pinsVec = new _WB.VectorPinDescriptor();
-		desc.pins.forEach(p => pinsVec.push_back({
-			number: p.number,
-			name: p.name,
-			x: p.x,
-			y: p.y,
-			directionFlags: p.directionFlags,
-		}));
-		// TODO: check if needed with new setPlacement, find ui undo method and sync wirebender instead
-		_wb.addComponent({
-			id: desc.id,
-			width: desc.width,
-			height: desc.height,
-			padding: desc.padding,
-			pins: pinsVec,
-		});
-		pinsVec.delete();
+/** Symbol replaced (S already updated). */
+export function replaceComponentRoute(comp, oldToNewMap) {
+	return _requestRoute({ replace: { compId: comp.id, pinMap: oldToNewMap } });
+}
 
-		_wb.setComponentPlacement(comp.id, { position: { x: comp.x, y: comp.y }, transform: { rotation: comp.rotation || 0, flipX: comp.flipX || false } });
-	});
-
-	const result = _wb.routeAll();
-	_applyRouteResult(result);
-	render();
+/** Full re-sync + route (undo, manual re-route). */
+export function routeWires() {
+	if (!S.components.length) return Promise.resolve();
+	return _requestRoute({ full: true });
 }
