@@ -253,6 +253,7 @@ async function loadDeviceBoms() {
 
 async function switchBom() {
 	resetStickyEditor();
+	if (cvManager) cvManager.clearFeats();
 	currentBomId = document.getElementById('bom-select').value;
 	localStorage.setItem('pcb_board_id', currentBomId);
 	currentImgId = null;
@@ -1909,6 +1910,7 @@ async function deleteCurrentImage() {
 		// Close the settings modal if open
 		history.back();
 
+		if (cvManager) cvManager.dropFeats(currentImgId);
 		currentImgId = null;
 		await loadProjectData();
 		resetStickyEditor();
@@ -2367,64 +2369,138 @@ async function runAutoCVBatch() {
 	if (!cvManager || !cvManager.ready) { cvManager.init(); return alert("CV initializing... wait."); }
 	if (!await confirmAction("Run Auto-CV on all unmatched images?", "Run Auto-CV")) return;
 
-	// Capture ID locally to prevent errors if user switches image during processing
 	const sourceId = currentImgId;
 	if (!sourceId) return;
 
-	document.getElementById('conn-list').innerHTML = '<div style="text-align:center; padding:2rem;">Processing...</div>';
-
-	// Only filter out self; bomImages is already scoped to project
+	const srcImg = bomImages.find(i => i.id === sourceId);
 	const others = bomImages.filter(i => i.id !== sourceId);
-	const sourceBlob = bomImages.find(i => i.id === sourceId).blob;
+	if (!srcImg || others.length === 0) return;
 
-	for (const other of others) {
-		const existing = await db.getOverlapsForPair(sourceId, other.id);
-		if (existing && existing.isManual) continue;
+	try {
+		showBusy("Extracting features from source image...");
+		await new Promise(r => setTimeout(r, 20));
+		const f1 = await cvManager.getFeats(srcImg);
+		if (!f1) { hideBusy(); return; }
 
-		const blob1 = sourceBlob;
-		const blob2 = other.blob;
+		const tracker = new ProgressTracker(others.length);
 
-		const f1 = await cvManager.feats(blob1);
-		const f2 = await cvManager.feats(blob2);
-
-		if (f1 && f2) {
-			const res = cvManager.findH(f1, f2);
-			if (res) {
-				await db.deleteOverlapsForPair(sourceId, other.id);
-				await db.addOverlap({
-					id: uuid(),
-					fromImageId: sourceId,
-					toImageId: other.id,
-					homography: res.hData,
-					inverseHomography: res.invHData,
-					matchCount: res.matches,
-					isManual: false
-				});
+		for (const other of others) {
+			const existing = await db.getOverlapsForPair(sourceId, other.id);
+			if (existing && existing.isManual) {
+				tracker.total--;   // skipped pairs don't count toward the estimate
+				continue;
 			}
+
+			showBusy(`Stitching vs ${other.name}`, tracker.report());
+			await new Promise(r => setTimeout(r, 20));
+
+			const f2 = await cvManager.getFeats(other, [sourceId]);
+			if (f2) {
+				const res = cvManager.findH(f1, f2);
+				await db.deleteOverlapsForPair(sourceId, other.id);	  // clear any stale auto-stitch
+				if (res) {
+					await db.addOverlap({
+						id: uuid(),
+						fromImageId: sourceId,
+						toImageId: other.id,
+						homography: res.hData,
+						inverseHomography: res.invHData,
+						matchCount: res.matches,
+						isManual: false
+					});
+				}
+			}
+			tracker.step();
 		}
-		if (f1) { f1.kp.delete(); f1.des.delete(); }
-		if (f2) { f2.kp.delete(); f2.des.delete(); }
+		showBusy("Finishing…", tracker.report());
+	} catch (e) {
+		console.error("Auto-CV batch failed", e);
+		alert("Auto-CV failed: " + e.message);
+	} finally {
+		hideBusy();
 	}
+
 	await renderConnectionsList();
 	updateOverlapCache().then(renderPins);
 }
 
-// UI Helper: Shows a global blocking overlay with a message
-function showBusy(msg) {
+// UI Helper: global blocking overlay with message and optional progress bar.
+// progress = { done, total, etaMs }  (etaMs null → "Estimating…")
+function formatEta(ms) {
+	if (ms === null || ms === undefined) return 'Estimating…';
+	const s = Math.max(0, Math.round(ms / 1000));
+	if (s < 5) return 'Almost done…';
+	if (s < 60) return `~${s}s left`;
+	const m = Math.floor(s / 60);
+	return `~${m}m ${String(s % 60).padStart(2, '0')}s left`;
+}
+
+function showBusy(msg, progress = null) {
 	let el = document.getElementById('busy-indicator');
 	if (!el) {
 		el = document.createElement('div');
 		el.id = 'busy-indicator';
-		el.style.cssText = "position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:rgba(0,0,0,0.8); color:white; padding:20px; border-radius:8px; z-index:9999; font-weight:bold; display:flex; align-items:center; gap:10px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);";
+		el.style.cssText = "position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:rgba(0,0,0,0.85); color:white; padding:20px 24px; border-radius:8px; z-index:9999; font-weight:bold; display:flex; flex-direction:column; gap:12px; min-width:280px; max-width:90vw; box-shadow:0 4px 15px rgba(0,0,0,0.3);";
+		el.innerHTML = `
+			<div style="display:flex; align-items:center; gap:10px;">
+				<span style="animation:spin 1s linear infinite; display:inline-block">⏳</span>
+				<span id="busy-msg"></span>
+			</div>
+			<div id="busy-progress" style="display:none;">
+				<div style="height:8px; background:rgba(255,255,255,0.2); border-radius:4px; overflow:hidden;">
+					<div id="busy-bar" style="height:100%; width:0%; background:#3b82f6; transition:width 0.3s ease;"></div>
+				</div>
+				<div style="display:flex; justify-content:space-between; gap:1rem; font-size:0.75rem; font-weight:600; color:#cbd5e1; margin-top:5px;">
+					<span id="busy-count"></span><span id="busy-eta"></span>
+				</div>
+			</div>`;
 		document.body.appendChild(el);
 	}
-	el.innerHTML = `<span style="animation:spin 1s linear infinite; display:inline-block">⏳</span> ${msg}`;
+
+	document.getElementById('busy-msg').textContent = msg;
+
+	const pWrap = document.getElementById('busy-progress');
+	if (progress && progress.total > 0) {
+		const pct = Math.min(100, (progress.done / progress.total) * 100);
+		pWrap.style.display = 'block';
+		document.getElementById('busy-bar').style.width = pct.toFixed(1) + '%';
+		document.getElementById('busy-count').textContent = `${progress.done} / ${progress.total}`;
+		document.getElementById('busy-eta').textContent = formatEta(progress.etaMs);
+	} else {
+		pWrap.style.display = 'none';
+	}
 	el.style.display = 'flex';
 }
 
 function hideBusy() {
 	const el = document.getElementById('busy-indicator');
 	if (el) el.style.display = 'none';
+}
+
+/**
+ * Tracks completed steps and extrapolates remaining time.
+ * Uses an exponential moving average of recent step durations, so the estimate
+ * adapts when some pairs are slower than others (e.g. large or feature-rich images).
+ */
+class ProgressTracker {
+	constructor(total) {
+		this.total = total;
+		this.done = 0;
+		this.avgMs = null;
+		this.last = performance.now();
+	}
+	step() {
+		const now = performance.now();
+		const dt = now - this.last;
+		this.last = now;
+		this.done++;
+		this.avgMs = (this.avgMs === null) ? dt : 0.6 * this.avgMs + 0.4 * dt;
+	}
+	report() {
+		const etaMs = (this.done > 0 && this.avgMs !== null)
+			? this.avgMs * (this.total - this.done) : null;
+		return { done: this.done, total: this.total, etaMs };
+	}
 }
 
 // Logic: Auto-stitch specific image against all others on the board
@@ -2435,32 +2511,26 @@ async function autoStitchNewImage(newId) {
 		await cvManager.init();
 	}
 
-	// Find the newly added image object
 	const newImg = bomImages.find(i => i.id === newId);
 	if (!newImg) return;
 
-	// Filter existing images (exclude the new one)
 	const others = bomImages.filter(i => i.id !== newId);
 	if (others.length === 0) return;
 
 	try {
 		showBusy("Extracting features from new image...");
+		await new Promise(r => setTimeout(r, 10));
 
-		// 1. Compute features for the NEW image ONCE
-		const fNew = await cvManager.feats(newImg.blob);
+		const fNew = await cvManager.getFeats(newImg);
 		if (!fNew) { hideBusy(); return; }
 
-		let matchesFound = 0;
+		const tracker = new ProgressTracker(others.length);
 
-		// 2. Compare against all others
-		for (let i = 0; i < others.length; i++) {
-			const other = others[i];
-			showBusy(`Stitching vs ${other.name}... (${i + 1}/${others.length})`);
+		for (const other of others) {
+			showBusy(`Stitching vs ${other.name}`, tracker.report());
+			await new Promise(r => setTimeout(r, 20));
 
-			// Tiny pause to let UI render the text update
-			await new Promise(r => setTimeout(r, 10));
-
-			const fOther = await cvManager.feats(other.blob);
+			const fOther = await cvManager.getFeats(other, [newId]);
 			if (fOther) {
 				const res = cvManager.findH(fNew, fOther);
 				if (res) {
@@ -2473,23 +2543,15 @@ async function autoStitchNewImage(newId) {
 						matchCount: res.matches,
 						isManual: false
 					});
-					matchesFound++;
 				}
-				// Free memory for the 'other' image immediately
-				if (fOther.kp) fOther.kp.delete();
-				if (fOther.des) fOther.des.delete();
 			}
+			tracker.step();
 		}
-
-		// Free memory for the 'new' image
-		if (fNew.kp) fNew.kp.delete();
-		if (fNew.des) fNew.des.delete();
-
+		showBusy("Finishing…", tracker.report());
 	} catch (e) {
 		console.error("Auto-stitch failed", e);
 	} finally {
 		hideBusy();
-		// Refresh overlaps if we successfully matched anything
 		if ((await db.getOverlapsForImage(newId)).length > 0) {
 			await updateOverlapCache();
 			renderPins();
