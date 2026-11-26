@@ -19,33 +19,44 @@ class CVManager {
 
 	async init() {
 		if (this.ready) return;
-		if (typeof cv !== 'undefined' && cv.Mat) {
+		if (typeof cv !== 'undefined') {
 			try {
-				// Tuned Settings: ORB 5000, Hamming
-				// More pyramid levels → tolerates much larger scale differences (macro vs wide)
-				this.detector = new cv.ORB(5000, 1.2, 12);
-				this.matcher = new cv.BFMatcher(cv.NORM_HAMMING, false);
-				this.cfg = {
-					ratio: 0.75,		  // Lowe ratio (applied in both directions)
-					minMatches: 20,		  // mutual matches needed before even trying RANSAC
-					minInliers: 15,		  // inliers after refinement
-					minInlierRatio: 0.20, // inliers / mutual matches
-					ransacPx: 4,		  // RANSAC threshold, in 2000px-working-image pixels
-					refinePx: 3,		  // inlier threshold after least-squares refit
-					minCoverage: 0.08,	  // inliers' bbox must cover this fraction of at least one image
-					minScale: 0.05,		  // allowed src→dst scale range (macro vs wide)
-					maxScale: 20
-				};
-				this.ready = true;
-				console.log("CV Core Initialized");
+				// Case 1: OpenCV 5 factory function -> call it to get the Promise
+				if (typeof cv === 'function') {
+					window.cv = cv();
+				}
+				// Case 2: OpenCV 5 Promise -> await it to get the resolved cv namespace
+				if (window.cv && typeof window.cv.then === 'function') {
+					window.cv = await window.cv;
+				}
+				if (window.cv && window.cv.Mat) {
+					// Tuned Settings: ORB 5000, Hamming
+					// More pyramid levels → tolerates much larger scale differences (macro vs wide)
+					this.detector = new cv.ORB(5000, 1.2, 12);
+					this.matcher = new cv.BFMatcher(cv.NORM_HAMMING, false);
+					this.cfg = {
+						ratio: 0.75,		  // Lowe ratio (applied in both directions)
+						minMatches: 20,		  // mutual matches needed before even trying RANSAC
+						minInliers: 15,		  // inliers after refinement
+						minInlierRatio: 0.20, // inliers / mutual matches
+						ransacPx: 4,		  // RANSAC threshold, in 2000px-working-image pixels
+						refinePx: 3,		  // inlier threshold after least-squares refit
+						minCoverage: 0.08,	  // inliers' bbox must cover this fraction of at least one image
+						minScale: 0.05,		  // allowed src→dst scale range (macro vs wide)
+						maxScale: 20
+					};
+					this.ready = true;
+					console.log("CV Core Initialized");
+					return;
+				}
 			} catch (e) {
 				console.error("CV Init Error:", e);
+				return;
 			}
-		} else {
-			this.initAttempts++;
-			if (this.initAttempts < 50) setTimeout(() => this.init(), 500);
-			else console.error("CV Failed to load OpenCV.js");
 		}
+		this.initAttempts++;
+		if (this.initAttempts < 50) setTimeout(() => this.init(), 500);
+		else console.error("CV Failed to load OpenCV.js");
 	}
 
 	// Helper: Project (x,y) using Homography Matrix
